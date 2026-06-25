@@ -1,0 +1,19 @@
+{
+  "packageId": "io.github.geocam25.geocam",
+  "host": "geocam25.github.io",
+  "name": "GeoCam",
+  "launcherName": "GeoCam",
+  "display": "standalone",
+  "orientation": "default",
+  "themeColor": "#000000",
+  "navigationColor": "#000000",
+  "backgroundColor": "#000000",
+  "startUrl": "/GEOCAM/",
+  "webManifestUrl": "https://geocam25.github.io/GEOCAM/manifest.json",
+  "iconUrl": "https://geocam25.github.io/GEOCAM/icons/icon-512.png",
+  "maskableIconUrl": "https://geocam25.github.io/GEOCAM/icons/icon-512.png",
+  "appVersionName": "1.0.0",
+  "appVersionCode": 1,
+  "fallbackType": "customtabs",
+  "enableNotifications": false
+}
