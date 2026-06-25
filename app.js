@@ -26,9 +26,13 @@ const DEFAULT_CONFIG = {
   sound: false,            // sonido al capturar (por defecto silencio)
   flash: false,            // flash al capturar (usa linterna)
   torchStart: false,       // linterna encendida al abrir
+  nightMode: false,        // linterna automática con poca luz
   whatsapp: false,         // compartir por WhatsApp tras capturar
-  whatsappTarget: ''       // número/grupo (referencia)
+  whatsappTarget: ''       // chat/grupo por defecto (referencia)
 };
+
+// Texto sembrado en versiones antiguas: si quedó guardado, se limpia (debe ir en blanco).
+const LEGACY_SEED_TEXT = 'Departamento de Operación y Distribución [EEPA]';
 
 // Sin modos predeterminados: cada persona crea los suyos en Configuración.
 const DEFAULT_MODES = [];
@@ -37,8 +41,12 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 function loadConfig() {
-  try { return Object.assign({}, DEFAULT_CONFIG, JSON.parse(localStorage.getItem(LS.config) || '{}')); }
-  catch (e) { return clone(DEFAULT_CONFIG); }
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(LS.config) || '{}'); } catch (e) { saved = {}; }
+  const cfg = Object.assign({}, DEFAULT_CONFIG, saved);
+  // El texto personalizado debe venir en blanco; limpiamos el sembrado antiguo.
+  if (cfg.customText === LEGACY_SEED_TEXT) cfg.customText = '';
+  return cfg;
 }
 function saveConfig() { localStorage.setItem(LS.config, JSON.stringify(config)); }
 function loadModes() {
@@ -65,11 +73,11 @@ const video = $('video');
 /* ---------------- Estado cámara ---------------- */
 let stream = null, videoTrack = null, currentDeviceId = null;
 let lensList = [], lensIndex = 0;
-let torchOn = false, torchSupported = false;
+let torchOn = false, torchSupported = false, torchAutoOn = false;
 let cameraStarting = false;
 
 /* ---------------- Geo / brújula ---------------- */
-let lastPos = null, geoWatch = null, lastHeading = null, headingBound = false;
+let lastPos = null, geoWatch = null, lastHeading = null, headingBound = false, headingState = 'idle';
 
 /* ---------------- Color automático (vista en vivo) ---------------- */
 let liveAutoColor = null;
@@ -171,6 +179,7 @@ async function toggleTorch() {
     return;
   }
   torchOn = !torchOn;
+  torchAutoOn = false; // toque manual: el modo nocturno no lo apagará por su cuenta
   try {
     await videoTrack.applyConstraints({ advanced: [{ torch: torchOn }] });
     $('btn-torch').classList.toggle('on', torchOn);
@@ -240,6 +249,18 @@ function sampleBrightness() {
     bCtx.drawImage(video, 0, 0, 16, 16);
     const avg = avgLum(bCtx.getImageData(0, 0, 16, 16).data);
     $('lowlight').classList.toggle('show', avg < 42);
+
+    // Modo nocturno: linterna automática con poca luz (con histéresis para no parpadear).
+    if (config.nightMode && torchSupported && videoTrack) {
+      if (avg < 34 && !torchOn) {
+        videoTrack.applyConstraints({ advanced: [{ torch: true }] })
+          .then(() => { torchOn = true; torchAutoOn = true; $('btn-torch').classList.add('on'); }).catch(() => {});
+      } else if (avg > 62 && torchOn && torchAutoOn) {
+        videoTrack.applyConstraints({ advanced: [{ torch: false }] })
+          .then(() => { torchOn = false; torchAutoOn = false; $('btn-torch').classList.remove('on'); }).catch(() => {});
+      }
+    }
+
     if (config.colorMode === 'auto') {
       const vw = video.videoWidth, vh = video.videoHeight;
       bCtx.drawImage(video, 0, vh * 0.62, vw, vh * 0.38, 0, 0, 16, 16);
@@ -270,16 +291,19 @@ async function ensureHeading() {
   if (headingBound) return;
   const handler = (ev) => {
     let h = null;
-    if (typeof ev.webkitCompassHeading === 'number') h = ev.webkitCompassHeading;
-    else if (ev.absolute && typeof ev.alpha === 'number') h = (360 - ev.alpha) % 360;
+    if (typeof ev.webkitCompassHeading === 'number') h = ev.webkitCompassHeading;          // iOS: norte real
+    else if (ev.absolute && typeof ev.alpha === 'number') h = (360 - ev.alpha) % 360;       // Android absoluto
     if (h != null && !isNaN(h)) { lastHeading = h; updateCompass(); }
   };
   if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-    try { const r = await DeviceOrientationEvent.requestPermission(); if (r !== 'granted') return; } catch (e) { return; }
+    try {
+      const r = await DeviceOrientationEvent.requestPermission();
+      if (r !== 'granted') { headingState = 'denied'; updateCompass(); return; }
+    } catch (e) { headingState = 'idle'; return; } // se reintenta en el próximo toque
   }
   window.addEventListener('deviceorientationabsolute', handler, true);
   window.addEventListener('deviceorientation', handler, true);
-  headingBound = true;
+  headingBound = true; headingState = 'on'; updateCompass();
 }
 function cardinalES(h) {
   h = ((h % 360) + 360) % 360;
@@ -293,9 +317,13 @@ function updateCompass() {
   if (!config.compass) { wrap.classList.remove('show'); return; }
   wrap.classList.add('show');
   const rose = $('compass-rose'), label = $('compass-label');
-  if (lastHeading == null) { label.textContent = '—'; rose.style.transform = 'rotate(0deg)'; return; }
+  if (lastHeading == null) {
+    rose.style.transform = 'rotate(0deg)';
+    label.textContent = headingState === 'denied' ? 'sin permiso' : 'tocar';
+    return;
+  }
   rose.style.transform = `rotate(${-lastHeading}deg)`;
-  label.textContent = cardinalES(lastHeading);
+  label.textContent = cardinalES(lastHeading).toUpperCase();
 }
 
 /* =========================================================================
@@ -641,6 +669,7 @@ function renderSettings() {
   $('cfg-sound').checked = config.sound;
   $('cfg-flash').checked = config.flash;
   $('cfg-torch-start').checked = config.torchStart;
+  $('cfg-night').checked = config.nightMode;
   $('cfg-whatsapp').checked = config.whatsapp;
   $('cfg-whatsapp-target').value = config.whatsappTarget || '';
   renderModesEditor();
@@ -668,6 +697,14 @@ function bindSettings() {
     if (config.torchStart && isIOS) { toast('La linterna no está disponible en iPhone (web)'); return; }
     if (config.torchStart && torchSupported && videoTrack && !torchOn) {
       videoTrack.applyConstraints({ advanced: [{ torch: true }] }).then(() => { torchOn = true; $('btn-torch').classList.add('on'); }).catch(() => {});
+    }
+  });
+  $('cfg-night').addEventListener('change', e => {
+    config.nightMode = e.target.checked; saveConfig();
+    if (config.nightMode && isIOS) { toast('El modo nocturno usa la linterna; no disponible en iPhone (web)'); return; }
+    if (config.nightMode && !torchSupported) { toast('Este equipo no permite controlar la linterna'); return; }
+    if (!config.nightMode && torchOn && torchAutoOn && videoTrack) {
+      videoTrack.applyConstraints({ advanced: [{ torch: false }] }).then(() => { torchOn = false; torchAutoOn = false; $('btn-torch').classList.remove('on'); }).catch(() => {});
     }
   });
   $('cfg-whatsapp').addEventListener('change', e => { config.whatsapp = e.target.checked; saveConfig(); });
@@ -1162,6 +1199,7 @@ function bindControls() {
   $('start-btn').addEventListener('click', () => { ensureHeading(); startCamera(currentDeviceId); });
   $('thumb').addEventListener('click', () => { if (lastThumbURL) window.open(lastThumbURL, '_blank'); });
   $('viewfinder-tap').addEventListener('click', onViewfinderTap);
+  $('compass').addEventListener('click', ensureHeading);
 }
 function tickClock() { setInterval(() => { if (isScreen('camera')) updateLiveOverlay(); }, 1000); }
 function registerSW() {
@@ -1182,11 +1220,15 @@ function init() {
   updateCompass();
   tickClock();
   startGeo();
-  ensureHeading();
   applyOrientation();
   registerSW();
   maybeShowInstall();
   checkIncomingConfig();
+
+  // La brújula (iOS) exige permiso desde un gesto: lo pedimos en la primera interacción.
+  const kickHeading = () => { ensureHeading(); };
+  window.addEventListener('touchend', kickHeading, { once: true });
+  window.addEventListener('click', kickHeading, { once: true });
 
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && isScreen('camera')) { ensureCamera(); startBrightnessMonitor(); }

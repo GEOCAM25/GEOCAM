@@ -281,11 +281,14 @@ body[data-screen="share"] #screen-share{display:block}
 }
 
 /* ====== Brújula (solo pantalla) ====== */
-#compass{display:none;flex-direction:column;align-items:center;gap:2px;
-  pointer-events:none;user-select:none}
+#compass{display:none;flex-direction:column;align-items:center;gap:3px;
+  position:relative;pointer-events:auto;user-select:none}
 #compass.show{display:flex}
-#compass-rose{position:relative;width:40px;height:40px;border-radius:50%;
-  border:1px solid var(--stroke);background:rgba(0,0,0,.34);
+#compass .c-fixed{position:absolute;top:-5px;left:50%;transform:translateX(-50%);
+  width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;
+  border-top:6px solid var(--accent);z-index:2}
+#compass-rose{position:relative;width:42px;height:42px;border-radius:50%;
+  border:1px solid var(--stroke);background:rgba(0,0,0,.4);
   backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
   transition:transform .12s linear}
 #compass-rose span{position:absolute;font-size:8px;font-weight:700;color:var(--muted);
@@ -294,12 +297,12 @@ body[data-screen="share"] #screen-share{display:block}
 #compass-rose .c-s{top:auto;bottom:3px;transform:translate(-50%,0)}
 #compass-rose .c-e{left:auto;right:3px;transform:translate(0,-50%)}
 #compass-rose .c-w{left:3px;transform:translate(0,-50%)}
-.c-needle{position:absolute;left:50%;top:50%;width:2px;height:15px;
+.c-needle{position:absolute;left:50%;top:50%;width:2px;height:16px;
   background:linear-gradient(to top,transparent,var(--accent));
   transform:translate(-50%,-100%);transform-origin:bottom center;border-radius:2px}
-#compass-label{font-size:10px;font-weight:700;color:#fff;
-  background:rgba(0,0,0,.34);padding:1px 8px;border-radius:999px;
-  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);letter-spacing:.3px}
+#compass-label{font-size:11px;font-weight:800;color:#fff;
+  background:rgba(0,0,0,.4);padding:1px 9px;border-radius:999px;
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);letter-spacing:.5px}
 
 /* ====== Banner instalar app ====== */
 #install-banner{position:absolute;left:0;right:0;

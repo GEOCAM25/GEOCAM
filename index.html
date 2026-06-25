@@ -37,11 +37,12 @@
 
     <!-- Brújula (solo referencia, nunca en la foto) -->
     <div id="compass">
+      <div class="c-fixed"></div>
       <div id="compass-rose">
         <span class="c-n">N</span><span class="c-e">Or</span><span class="c-s">S</span><span class="c-w">Pte</span>
         <div class="c-needle"></div>
       </div>
-      <span id="compass-label">—</span>
+      <span id="compass-label">tocar</span>
     </div>
 
     <div id="top-actions">
@@ -71,8 +72,8 @@
     <button id="btn-torch" class="round" aria-label="Linterna">
       <svg viewBox="0 0 24 24"><path d="M9 2h6l-.6 4.2a2 2 0 0 1-.5 1.05l-.9.95v11.3a1.5 1.5 0 0 1-3 0V8.2l-.9-.95a2 2 0 0 1-.5-1.05L9 2z"/><path d="M9.2 6.5h5.6"/></svg>
     </button>
-    <button id="btn-macro" class="round" aria-label="Macro">
-      <svg viewBox="0 0 24 24"><path d="M12 12c-2 0-4-1.6-4-4 2.2 0 4 1.6 4 4zM12 12c2 0 4-1.6 4-4-2.2 0-4 1.6-4 4zM12 12c0-2 1.6-4 4-4 0 2.2-1.6 4-4 4zM12 12c0 2-1.6 4-4 4 0-2.2 1.6-4 4-4z"/><circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none"/></svg>
+    <button id="btn-macro" class="round" aria-label="Macro (objetos cercanos)">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/><ellipse cx="12" cy="5.6" rx="2.3" ry="3.4"/><ellipse cx="12" cy="18.4" rx="2.3" ry="3.4"/><ellipse cx="5.6" cy="12" rx="3.4" ry="2.3"/><ellipse cx="18.4" cy="12" rx="3.4" ry="2.3"/></svg>
     </button>
     <button id="btn-lens" class="round hidden" aria-label="Cambiar lente">
       <svg viewBox="0 0 24 24"><path d="M3 8a4 4 0 0 1 4-4h7l-2-2M21 16a4 4 0 0 1-4 4H10l2 2"/></svg>
@@ -206,7 +207,11 @@
       <span>Linterna encendida al abrir</span>
       <label class="switch"><input type="checkbox" id="cfg-torch-start"><span class="slider"></span></label>
     </div>
-    <p class="note" style="margin-top:-4px">Flash y linterna funcionan en Android; en iPhone (web) no están disponibles.</p>
+    <div class="switch-row">
+      <span>Modo nocturno (linterna automática con poca luz)</span>
+      <label class="switch"><input type="checkbox" id="cfg-night"><span class="slider"></span></label>
+    </div>
+    <p class="note" style="margin-top:-4px">Flash, linterna y modo nocturno funcionan en Android; en iPhone (web) no están disponibles.</p>
 
     <div class="section-title">Envío por WhatsApp</div>
     <div class="switch-row">
@@ -216,7 +221,7 @@
     <div class="field">
       <label for="cfg-whatsapp-target">Contacto o grupo (referencia)</label>
       <input type="text" id="cfg-whatsapp-target" placeholder="Ej: Cuadrilla Puente Alto">
-      <p class="note">Tras cada foto se abre WhatsApp con la imagen lista; eliges el chat y envías. El envío 100% automático/silencioso no lo permite WhatsApp en una web.</p>
+      <p class="note">Tras cada foto se abre el menú de Compartir con la imagen lista: tocas WhatsApp y eliges el chat. WhatsApp <b>no permite</b> que una web suba la foto sola a un chat fijo ni la envíe sin tu confirmación.</p>
     </div>
 
     <!-- Modos -->
