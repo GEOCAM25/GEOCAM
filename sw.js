@@ -1,16 +1,16 @@
 /* GeoCam Service Worker — cachea el "app shell" para arranque rápido y uso sin conexión. */
-const VERSION = 'geocam-v5';
+const VERSION = 'geocam-v6';
 const SHELL = [
   './',
   './index.html',
   './app.js',
   './styles.css',
   './manifest.json',
-  './icons/icon-192.png',
-  './icons/icon-512.png',
-  './icons/icon-180.png',
-  './icons/icon-167.png',
-  './icons/icon-152.png'
+  './Icons/icon-192.png',
+  './Icons/icon-512.png',
+  './Icons/icon-180.png',
+  './Icons/icon-167.png',
+  './Icons/icon-152.png'
 ];
 
 /* Instala y precachea el shell */
