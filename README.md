@@ -1,96 +1,90 @@
 # GeoCam 📸
 
-Cámara web que **graba sobre la foto** tu texto, la fecha y hora completas y las **coordenadas GPS reales** (buscables en cualquier mapa), con el estilo de las fotos de terreno.
+Cámara web que **graba sobre la foto** tu texto, la fecha y hora completas y las **coordenadas GPS reales** (buscables en cualquier mapa). Funciona como **PWA** instalable; en **Android** se puede empaquetar como **APK** (ver abajo). En iPhone se usa la misma dirección como app.
 
-Funciona como **PWA** instalable. Pensada para usarse sobre todo en **Android**.
+> ✍️ **Vacía de fábrica.** El **texto** y los **modos** **no vienen predeterminados**: cada persona escribe lo suyo en *Configuración*.
 
-> ✍️ **Vacía de fábrica.** El **texto personalizado** y los **modos** **no vienen predeterminados**: cada persona escribe su texto y crea sus propios modos en *Configuración*. Así nada queda fijado por defecto.
-
-> 🔒 **Privacidad y aislamiento.** No hay servidor ni cuentas. Todo se guarda **solo en este dispositivo** (`localStorage`). Cada instalación es independiente: **nada se traspasa solo** entre teléfonos. Tu compañero **no verá** tu configuración salvo que se la **compartas a propósito** y él **confirme** importarla.
+> 🔒 **Aislamiento total.** No hay servidor ni cuentas. Todo se guarda **solo en este dispositivo** (`localStorage`). **Nada se traspasa solo** entre teléfonos. Tu compañero **no verá** tu configuración salvo que se la **compartas a propósito** y él **confirme** importarla.
 
 ---
 
-## 📲 Instalar / convertirla en app (APK)
+## Qué hace (resumen)
 
-Una PWA no es un archivo `.apk` en sí, pero **sí se convierte en una app de Android**. Tienes dos caminos:
+- **Sobre la foto:** texto + coordenadas + fecha/hora. Si activas **dirección**, también la calle exacta (orden: texto → dirección → coordenadas → fecha).
+- **Arriba (solo visual, nunca en la foto):** el **nombre de la calle** y una **brújula en franja** que indica hacia dónde apuntas: Norte / Sur / Oriente / Poniente.
+- **Macro** (al lado del obturador): interruptor que **solo enfoca de cerca** (no dispara). Tú tomas la foto y se apaga solo. Queda **amarillo** cuando está activo.
+- **Linterna**, **flash al capturar**, **modo nocturno** (linterna automática con poca luz) y **cambio de cámara** (principal/gran angular/frontal). Abre siempre en la principal.
+- **Relación de aspecto** ajustable (completa, 3:4, 9:16, 1:1, 4:3, 16:9).
+- **Color** fijo (amarillo) o **automático según el fondo**, con **sombreado** opcional.
+- **Modos**: listas de pasos sobre el obturador, con **✕** para saltar y **↻** para reiniciar.
+- **Aviso "IMAGEN MOVIDA"** si la foto sale movida.
+- **Sonido** opcional (silencio por defecto).
+- **Compartir/importar** tu configuración por enlace o archivo.
 
-### A) La forma fácil, sin computador (recomendada)
-En **Android (Chrome)**: abre la dirección de la app y toca **Instalar** (en el banner que aparece) o menú **⋮ → Instalar app**.
-➡️ Android crea una **app real** (un *WebAPK* firmado por Google) con el ícono en el cajón de aplicaciones. Para la mayoría de los usos, **eso es el "APK"**: se abre a pantalla completa y sin barra de navegador, como cualquier app. No requiere compilar nada.
+---
 
-### B) Generar un archivo `.apk` / `.aab` de verdad (para repartir o subir a Play Store)
-Usa **https://www.pwabuilder.com** (funciona desde el navegador, incluso en el teléfono):
-1. Publica la app en GitHub Pages (ver más abajo) y copia su dirección `https://...`.
-2. Pégala en PWABuilder → **Package For Stores → Android**.
-3. Descarga el paquete. Te entrega el `.apk`/`.aab` **firmado** y un archivo **`assetlinks.json`**.
-4. Sube ese `assetlinks.json` a tu sitio en `/.well-known/assetlinks.json` para que la app abra **sin la barra de direcciones**.
+## 📲 Convertir en app / APK
 
-> 📌 **Solo Android.** No se puede generar un APK para iPhone (iOS usa otro formato y exige Mac/Xcode/App Store). En iPhone la app se instala con **Compartir → Añadir a pantalla de inicio**.
+**Android, sin compilar:** abre la dirección en Chrome y toca **Instalar** → queda como app real (WebAPK).
+
+**APK como archivo** (para repartir o subir a Play Store): usa **PWABuilder** o **Bubblewrap**.
+👉 Guía paso a paso en **[`twa/README-APK.md`](twa/README-APK.md)** (incluye cómo quitar la barra del navegador con `assetlinks.json` y una plantilla en `twa/`).
+
+> El APK por PWABuilder es una **TWA** (abre la web por dentro). **No** envía fotos solas a WhatsApp; usa el flujo de Compartir. El envío automático a un grupo solo existe con app nativa Kotlin o **WhatsApp Cloud API + servidor**.
 >
-> Si publicas en una *project page* (`usuario.github.io/geocam/`), el `assetlinks.json` debe ir en la raíz del dominio (`usuario.github.io/.well-known/`). Si no controlas esa raíz, la app igual funciona pero puede mostrar brevemente la barra de direcciones. Un dominio propio o una *user page* lo evita.
+> En iPhone **no** se hace APK: se instala como PWA (**Compartir → Añadir a pantalla de inicio**).
 
 ---
 
 ## 🚀 Publicar en GitHub Pages
 
-1. Crea un repositorio nuevo (por ejemplo `geocam`).
-2. Sube **todos** estos archivos a la raíz del repo (no dentro de una carpeta):
-   `index.html`, `app.js`, `styles.css`, `manifest.json`, `sw.js`, `README.md` y la carpeta `icons/`.
-3. **Settings → Pages → Source: Deploy from a branch**, rama `main`, carpeta `/ (root)`.
-4. Espera ~1 minuto. Tu dirección será como `https://TU-USUARIO.github.io/geocam/`.
-5. Ábrela **desde el teléfono**.
+1. Repo nuevo. Sube **todo** a la raíz: `index.html`, `app.js`, `styles.css`, `manifest.json`, `sw.js`, la carpeta `icons/` y (opcional) la carpeta `twa/`.
+2. **Settings → Pages → Deploy from a branch → main → /(root)**.
+3. Abre `https://TU-USUARIO.github.io/TU-REPO/` desde el teléfono (debe ser **https**).
 
-> ⚠️ **Debe ser `https://`** (GitHub Pages ya lo es). La cámara y el GPS **no funcionan** por `http://` ni abriendo el archivo directamente.
-
-Al actualizar archivos, la app se refresca sola (el Service Worker sube de versión).
+> ¿El ícono no aparece al "Añadir a inicio"? Verifica que `…/icons/icon-180.png` abra en el navegador. **GitHub distingue mayúsculas**: si tu repo es `GEOCAM`, la ruta es `…/GEOCAM/icons/...`.
 
 ---
 
-## ⚙️ Cómo se usa
+## 🔁 Compartir configuración
 
-- **Botón blanco:** captura (con texto + coords + fecha grabados).
-- **Macro 🌼 (riel derecho):** enfoca y **captura objetos cercanos**.
-- **Linterna 🔦** y **cambio de lente / gran angular** (cuando el equipo lo permite).
-- **Rueda inferior:** desliza para cambiar de **modo** (los creas tú). Sobre el obturador aparece el paso a tomar; **✕** salta el paso y **↻** reinicia.
-- **Tocar la pantalla:** intenta enfocar ese punto.
-- **Brújula arriba:** Norte / Sur / Oriente / Poniente. Solo referencia; **nunca** se graba en la foto.
-- **Ícono de imagen (arriba):** editor de galería — carga una foto y añádele texto, coordenadas (a mano o en **mapa**) y fecha; arrastra el texto y guarda.
-- **⚙️ Configuración:** tu **texto**, orientación, color (fijo o **automático según el fondo**), sombreado, brújula, sonido, flash, linterna al abrir, WhatsApp y tus **modos**.
+*Configuración → Compartir* → marca qué incluir (texto, color/sombra, modos) → **Compartir enlace** o **Exportar archivo**. La otra persona abre el enlace en GeoCam, revisa y toca **Importar**. Los modos se **suman** (no borra nada).
 
 ---
 
-## 🔁 Compartir configuración con otra persona
+## 📦 WhatsApp por modo
 
-*Configuración → Compartir* → marca qué incluir y elige modos → **Compartir enlace** (por WhatsApp) o **Exportar archivo**. La otra persona abre el enlace en GeoCam, revisa el resumen y toca **Importar**. Los modos se **suman** a los suyos; nada ocurre sin su confirmación.
+Cada modo puede tener su **chat/grupo** y un **mensaje** propios. En *Configuración → Envío por WhatsApp* eliges:
+- **Cada foto al tomarla**, o
+- **Todas juntas al completar el modo** (el mensaje incluye la **hora de la 1ª y la última imagen**, útil para saber el horario de una falla).
+
+En todos los casos se abre el menú de **Compartir** con la(s) imagen(es): eliges WhatsApp y el chat. WhatsApp no permite que una web (ni una TWA) las envíe solas a un chat fijo.
 
 ---
 
-## ✅ Qué funciona en cada teléfono
+## ✅ Android vs iPhone
 
-| Función | Android (Chrome) | iPhone (Safari / web) |
+| Función | Android | iPhone (web) |
 |---|---|---|
-| Texto + fecha + coordenadas sobre la foto | ✅ | ✅ |
-| Color automático según el fondo | ✅ | ✅ |
-| Macro (objetos cercanos) | ✅ | ⚠️ limitado por el navegador |
-| Aviso "IMAGEN MOVIDA" | ✅ | ✅ |
-| Brújula en pantalla | ✅ | ✅ (pide permiso de movimiento) |
-| Compartir/importar configuración | ✅ | ✅ |
-| Editor de galería + mapa · Modos · Sonido | ✅ | ✅ |
-| **Convertir en app/APK** | ✅ (Instalar = WebAPK, o PWABuilder) | ❌ APK no existe en iOS; se instala como PWA |
-| **Flash / linterna al capturar** | ✅ | ❌ no permitido en web |
-| **Linterna encendida al abrir** | ✅ | ❌ no permitido en web |
-| **Guardar directo en la galería** | ✅ descarga directa | ⚠️ "Compartir" → *Guardar imagen* |
-| **WhatsApp al capturar** | ✅ abre WhatsApp con la foto (eliges chat y envías) | ⚠️ igual, vía Compartir |
-| **No permitir foto al revés** | ✅ | ⚠️ se bloquea la captura al revés (el bloqueo del sistema no está disponible) |
+| Texto + fecha + coordenadas + dirección | ✅ | ✅ |
+| Calle arriba + brújula | ✅ | ✅ (pide permiso de movimiento) |
+| Relación de aspecto · Color auto · Modos | ✅ | ✅ |
+| Macro (solo enfoque) | ✅ | ⚠️ limitado por el navegador |
+| Cambio de cámara | ✅ | ✅ |
+| **App / APK** | ✅ Instalar o PWABuilder | ❌ APK no existe en iOS; va como PWA |
+| **Flash / linterna / modo nocturno** | ✅ | ❌ no permitido en web |
+| **Guardar directo en galería** | ✅ | ⚠️ "Compartir" → Guardar imagen |
+| **WhatsApp al capturar** | ✅ (eliges chat y envías) | ⚠️ igual, vía Compartir |
 
-### Lo que **una web no puede** (solo con app nativa)
-- **Enviar la foto por WhatsApp 100% automática y silenciosa** a un grupo fijo: WhatsApp/el navegador no lo permiten. Lo máximo es **abrir WhatsApp con la imagen lista** y tocar enviar.
-- **Capturar en segundo plano** (app cerrada o pantalla bloqueada): el navegador suspende la cámara; al volver se reactiva sola.
+### Lo que una web/TWA **no puede** (solo app nativa o Cloud API + servidor)
+- Enviar fotos a un chat fijo de WhatsApp **solo y sin confirmar**.
+- Capturar **en segundo plano** (app cerrada). Al volver, la cámara se reactiva sola.
 
 ---
 
 ## 🎛️ Ajustes en `app.js`
-- `DEFAULT_CONFIG` / `DEFAULT_MODES`: valores de fábrica (texto y modos vienen vacíos a propósito).
-- `BLUR_THRESHOLD`: sensibilidad del aviso "IMAGEN MOVIDA".
+- `DEFAULT_CONFIG` / `DEFAULT_MODES` (vacíos a propósito).
+- `BLUR_THRESHOLD`: sensibilidad de "IMAGEN MOVIDA".
+- La dirección usa OpenStreetMap (Nominatim); requiere conexión.
 
 Hecho para uso en terreno.

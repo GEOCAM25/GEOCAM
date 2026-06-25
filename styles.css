@@ -280,29 +280,26 @@ body[data-screen="share"] #screen-share{display:block}
   #overlay{font-size:12px}
 }
 
-/* ====== Brújula (solo pantalla) ====== */
-#compass{display:none;flex-direction:column;align-items:center;gap:3px;
+/* ====== Brújula: franja horizontal (solo pantalla) ====== */
+#compass{display:none;flex-direction:column;align-items:center;gap:2px;
   position:relative;pointer-events:auto;user-select:none}
 #compass.show{display:flex}
-#compass .c-fixed{position:absolute;top:-5px;left:50%;transform:translateX(-50%);
-  width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;
-  border-top:6px solid var(--accent);z-index:2}
-#compass-rose{position:relative;width:42px;height:42px;border-radius:50%;
-  border:1px solid var(--stroke);background:rgba(0,0,0,.4);
+#compass-strip{position:relative;width:210px;height:20px;overflow:hidden;
+  border-radius:6px;background:rgba(0,0,0,.4);border:1px solid var(--stroke);
   backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
-  transition:transform .12s linear}
-#compass-rose span{position:absolute;font-size:8px;font-weight:700;color:var(--muted);
-  left:50%;top:50%;transform:translate(-50%,-50%)}
-#compass-rose .c-n{top:3px;color:var(--accent)}
-#compass-rose .c-s{top:auto;bottom:3px;transform:translate(-50%,0)}
-#compass-rose .c-e{left:auto;right:3px;transform:translate(0,-50%)}
-#compass-rose .c-w{left:3px;transform:translate(0,-50%)}
-.c-needle{position:absolute;left:50%;top:50%;width:2px;height:16px;
-  background:linear-gradient(to top,transparent,var(--accent));
-  transform:translate(-50%,-100%);transform-origin:bottom center;border-radius:2px}
+  -webkit-mask-image:linear-gradient(90deg,transparent,#000 18%,#000 82%,transparent);
+  mask-image:linear-gradient(90deg,transparent,#000 18%,#000 82%,transparent)}
+#compass-strip .cm{position:absolute;top:50%;transform:translate(-50%,-50%);
+  font-size:11px;font-weight:800;color:#fff;letter-spacing:.4px;display:none}
+#compass-strip .cm.cm-min{width:1px;height:6px;background:var(--muted);
+  font-size:0;transform:translate(-50%,-50%)}
+#compass-strip .c-n{color:var(--accent)}
+.compass-center{position:absolute;top:-3px;left:50%;transform:translateX(-50%);
+  width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;
+  border-top:6px solid var(--accent);z-index:3}
 #compass-label{font-size:11px;font-weight:800;color:#fff;
   background:rgba(0,0,0,.4);padding:1px 9px;border-radius:999px;
-  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);letter-spacing:.5px}
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);letter-spacing:.6px}
 
 /* ====== Banner instalar app ====== */
 #install-banner{position:absolute;left:0;right:0;
@@ -341,3 +338,28 @@ body[data-screen="share"] #screen-share{display:block}
   font-family:inherit;max-height:38vh;overflow:auto}
 .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
 .modal-actions .map-ghost,.modal-actions .map-action{flex:1;text-align:center}
+
+/* ====== Guía de relación de aspecto ====== */
+#aspect-frame{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);
+  display:none;border:1.5px solid rgba(255,255,255,.55);border-radius:6px;
+  box-shadow:0 0 0 4000px rgba(0,0,0,.34);z-index:6;pointer-events:none}
+#aspect-frame.show{display:block}
+
+/* ====== Botón macro (al lado del obturador) ====== */
+#macro-side{display:flex;align-items:center;justify-content:center}
+.side-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  width:58px;height:58px;border-radius:50%;background:rgba(255,255,255,.1);
+  border:1px solid var(--stroke);color:#fff;
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);transition:all .15s ease}
+.side-btn svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.7}
+.side-btn span{font-size:9px;font-weight:700;letter-spacing:.3px}
+.side-btn:active{transform:scale(.94)}
+.side-btn.active{background:var(--accent);border-color:var(--accent);color:#1a1d11}
+
+/* ====== WhatsApp por modo (editor de modos) ====== */
+.mode-wa{margin-top:10px;display:flex;flex-direction:column;gap:8px;
+  padding-top:10px;border-top:1px dashed var(--stroke)}
+.mode-wa-target,.mode-wa-msg{width:100%;background:var(--bg);border:1px solid var(--stroke);
+  border-radius:10px;color:var(--txt);font-size:13.5px;padding:9px 11px;font-family:inherit}
+.mode-wa-msg{resize:vertical;line-height:1.4}
+.mode-wa-target::placeholder,.mode-wa-msg::placeholder{color:var(--muted)}

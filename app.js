@@ -19,15 +19,18 @@ const DEFAULT_CONFIG = {
   textColor: '#C9D646',
   shadow: true,            // sombreado/contorno negro
   showAltitude: true,
+  showAddress: false,      // incluir la dirección (calle) en la foto
   decimals: 5,
   saveMode: 'auto',        // auto | share | download
   filePrefix: 'foto',
+  aspect: 'full',          // full | 4:3 | 3:4 | 16:9 | 9:16 | 1:1
   compass: true,           // brújula en pantalla (nunca en la foto)
   sound: false,            // sonido al capturar (por defecto silencio)
   flash: false,            // flash al capturar (usa linterna)
   torchStart: false,       // linterna encendida al abrir
   nightMode: false,        // linterna automática con poca luz
   whatsapp: false,         // compartir por WhatsApp tras capturar
+  whatsappMode: 'each',    // each | complete (cada foto | todas al completar el modo)
   whatsappTarget: ''       // chat/grupo por defecto (referencia)
 };
 
@@ -85,6 +88,13 @@ let liveAutoColor = null;
 /* ---------------- Modos ---------------- */
 let activeModeId = (modes[0] && modes[0].id) || 'libre';
 let stepIndex = 0;
+let macroActive = false;          // botón macro: solo enfoque cercano (no captura)
+let modeBatch = [];               // fotos acumuladas del modo para compartir juntas
+
+/* ---------------- Dirección (geocodificación inversa) ---------------- */
+let currentStreetShort = '';      // calle para mostrar arriba (solo visual)
+let currentAddressFull = '';      // dirección para la foto (si se activa)
+let lastGeoFetch = 0, lastGeoLatLon = null;
 
 /* ---------------- Importación pendiente ---------------- */
 let pendingImport = null;
@@ -137,20 +147,27 @@ async function startCamera(deviceId) {
   try { currentDeviceId = videoTrack.getSettings().deviceId || deviceId || null; } catch (e) {}
   detectTorch();
   await enumerateCams();
+  // Autoenfoque continuo si el equipo lo permite (mejora el enfoque general)
+  try {
+    const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+    if (caps.focusMode && caps.focusMode.includes('continuous')) {
+      await videoTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+    }
+  } catch (e) {}
+  macroActive = false; $('btn-macro').classList.remove('active');
   // Linterna siempre encendida al abrir
   if (config.torchStart && torchSupported && !torchOn) {
     try { await videoTrack.applyConstraints({ advanced: [{ torch: true }] }); torchOn = true; $('btn-torch').classList.add('on'); } catch (e) {}
   }
   cameraStarting = false;
+  updateAspectFrame();
   updateLiveOverlay();
 }
 
 async function enumerateCams() {
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
-    const vids = devices.filter(d => d.kind === 'videoinput');
-    const backs = vids.filter(d => /back|rear|environment|trasera|posterior|wide|tele/i.test(d.label || ''));
-    lensList = backs.length ? backs : vids;
+    lensList = devices.filter(d => d.kind === 'videoinput'); // todas las cámaras (incluye frontal)
     const idx = lensList.findIndex(d => d.deviceId === currentDeviceId);
     lensIndex = idx >= 0 ? idx : 0;
     $('btn-lens').classList.toggle('hidden', lensList.length < 2);
@@ -158,11 +175,14 @@ async function enumerateCams() {
 }
 
 async function switchLens() {
-  if (lensList.length < 2) { toast('Sin lentes adicionales en este equipo'); return; }
+  if (lensList.length < 2) { toast('Sin otras cámaras en este equipo'); return; }
   lensIndex = (lensIndex + 1) % lensList.length;
   const label = (lensList[lensIndex].label || '').toLowerCase();
   await startCamera(lensList[lensIndex].deviceId);
-  toast(/ultra|wide|gran/.test(label) ? 'Gran angular' : (/tele/.test(label) ? 'Teleobjetivo' : 'Cámara ' + (lensIndex + 1)));
+  toast(/front|frontal|user|face|selfie/.test(label) ? 'Cámara frontal'
+      : /ultra|gran|wide/.test(label) ? 'Gran angular'
+      : /tele/.test(label) ? 'Teleobjetivo'
+      : 'Cámara ' + (lensIndex + 1));
 }
 
 /* ---- Linterna ---- */
@@ -186,27 +206,48 @@ async function toggleTorch() {
   } catch (e) { torchOn = !torchOn; toast('No se pudo cambiar la linterna'); }
 }
 
-/* ---- Macro ---- */
-async function macroCapture() {
-  let applied = false;
+/* ---- Macro (toggle de enfoque cercano; NO captura) ---- */
+async function toggleMacro() {
+  if (!videoTrack) { toast('La cámara aún no está lista'); return; }
+  macroActive = !macroActive;
+  const btn = $('btn-macro');
+  if (macroActive) {
+    let ok = false;
+    try {
+      const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+      if (caps.focusDistance) {
+        await videoTrack.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: caps.focusDistance.min }] });
+        ok = true;
+      }
+    } catch (e) {}
+    if (!ok) {
+      const uw = lensList.find(d => /ultra|gran|wide/i.test(d.label || ''));
+      if (uw && uw.deviceId !== currentDeviceId) {
+        await startCamera(uw.deviceId);
+        lensIndex = lensList.findIndex(d => d.deviceId === uw.deviceId);
+        macroActive = true; // startCamera lo resetea; lo reactivamos
+        ok = true;
+      }
+    }
+    btn.classList.add('active');
+    toast(ok ? 'Macro activado · enfoca de cerca y toca la foto'
+             : (isIOS ? 'Macro limitado en iPhone (web). Acerca el equipo' : 'Acerca el equipo al objeto'));
+  } else {
+    await restoreFocus();
+    btn.classList.remove('active');
+    toast('Macro desactivado');
+  }
+}
+async function restoreFocus() {
   try {
     const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
-    if (caps.focusDistance) {
-      await videoTrack.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: caps.focusDistance.min }] });
-      applied = true; toast('Macro · enfoque cercano');
+    if (caps.focusMode && caps.focusMode.includes('continuous')) {
+      await videoTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
     }
   } catch (e) {}
-  if (!applied) {
-    const uw = lensList.find(d => /ultra|wide|gran/i.test(d.label || ''));
-    if (uw && uw.deviceId !== currentDeviceId) {
-      await startCamera(uw.deviceId);
-      lensIndex = lensList.findIndex(d => d.deviceId === uw.deviceId);
-      applied = true; toast('Macro · gran angular');
-      await sleep(400);
-    }
-  }
-  if (!applied) toast(isIOS ? 'Macro limitado en iPhone (web). Acerca el equipo' : 'Acerca el equipo al objeto');
-  capturePhoto();
+}
+function macroOffAfterCapture() {
+  if (macroActive) { macroActive = false; $('btn-macro').classList.remove('active'); restoreFocus(); }
 }
 
 /* ---- Tocar para enfocar ---- */
@@ -278,10 +319,48 @@ function startGeo() {
   if (!navigator.geolocation) { $('coords-readout').textContent = 'GPS no disponible'; return; }
   if (geoWatch != null) return;
   geoWatch = navigator.geolocation.watchPosition(
-    (p) => { lastPos = p; $('coords-readout').classList.add('ok'); updateLiveOverlay(); },
-    (e) => { $('coords-readout').classList.remove('ok'); if (!lastPos) $('coords-readout').textContent = 'Buscando GPS…'; },
+    (p) => { lastPos = p; updateLiveOverlay(); maybeReverseGeocode(); },
+    (e) => { if (!currentStreetShort) $('coords-readout').textContent = 'Buscando ubicación…'; },
     { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 }
   );
+}
+
+/* Distancia aproximada en metros */
+function haversine(la1, lo1, la2, lo2) {
+  const R = 6371000, toR = Math.PI / 180;
+  const dLa = (la2 - la1) * toR, dLo = (lo2 - lo1) * toR;
+  const a = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * toR) * Math.cos(la2 * toR) * Math.sin(dLo / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/* Nombre de calle (arriba, solo visual) + dirección para la foto.
+   Usa OpenStreetMap (Nominatim). Si falla o no hay conexión, se omite. */
+async function maybeReverseGeocode() {
+  if (!lastPos) return;
+  const lat = lastPos.coords.latitude, lon = lastPos.coords.longitude;
+  const now = Date.now();
+  if (lastGeoLatLon && haversine(lat, lon, lastGeoLatLon[0], lastGeoLatLon[1]) < 25 && now - lastGeoFetch < 30000) return;
+  if (now - lastGeoFetch < 8000) return; // respeta el límite de uso
+  lastGeoFetch = now; lastGeoLatLon = [lat, lon];
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=json&zoom=18&addressdetails=1&lat=${lat}&lon=${lon}`;
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    if (!res.ok) return;
+    const j = await res.json();
+    const a = j.address || {};
+    const road = a.road || a.pedestrian || a.residential || a.footway || a.path || a.cycleway || '';
+    const num = a.house_number ? ' ' + a.house_number : '';
+    const area = a.suburb || a.neighbourhood || a.quarter || a.city_district || a.town || a.city || a.village || a.county || '';
+    currentStreetShort = road ? (road + num) : (area || '');
+    currentAddressFull = [road ? road + num : '', area].filter(Boolean).join(', ') || currentStreetShort;
+    updateTopStreet();
+    if (config.showAddress) updateLiveOverlay();
+  } catch (e) { /* sin conexión o bloqueado: se omite la dirección */ }
+}
+function updateTopStreet() {
+  const el = $('coords-readout');
+  el.textContent = currentStreetShort || '—';
+  el.classList.toggle('ok', !!currentStreetShort);
 }
 
 /* =========================================================================
@@ -316,13 +395,22 @@ function updateCompass() {
   const wrap = $('compass');
   if (!config.compass) { wrap.classList.remove('show'); return; }
   wrap.classList.add('show');
-  const rose = $('compass-rose'), label = $('compass-label');
+  const label = $('compass-label');
+  const strip = $('compass-strip');
+  const marks = strip ? strip.querySelectorAll('.cm') : [];
   if (lastHeading == null) {
-    rose.style.transform = 'rotate(0deg)';
     label.textContent = headingState === 'denied' ? 'sin permiso' : 'tocar';
+    marks.forEach(el => { el.style.display = 'none'; });
     return;
   }
-  rose.style.transform = `rotate(${-lastHeading}deg)`;
+  const W = 210, pxPerDeg = W / 140; // ~140° visibles a lo ancho
+  marks.forEach(el => {
+    const b = +el.dataset.deg;
+    let diff = ((b - lastHeading + 540) % 360) - 180; // diferencia más corta [-180,180]
+    const x = W / 2 + diff * pxPerDeg;
+    if (x < -14 || x > W + 14) { el.style.display = 'none'; }
+    else { el.style.display = ''; el.style.left = x + 'px'; }
+  });
   label.textContent = cardinalES(lastHeading).toUpperCase();
 }
 
@@ -337,6 +425,7 @@ function buildLines(pos, date) {
   date = date || new Date();
   const lines = [];
   (config.customText || '').split('\n').forEach(t => { if (t.trim() !== '') lines.push(t); });
+  if (config.showAddress && currentAddressFull) lines.push(currentAddressFull);
   let coord;
   if (pos && pos.coords && typeof pos.coords.latitude === 'number') {
     const lat = pos.coords.latitude.toFixed(config.decimals);
@@ -360,8 +449,8 @@ function updateLiveOverlay() {
   ov.style.textShadow = config.shadow ? '0 1px 3px rgba(0,0,0,.85),0 0 1px rgba(0,0,0,.9)' : 'none';
   ov.innerHTML = '';
   lines.forEach(t => { const div = document.createElement('div'); div.textContent = t; ov.appendChild(div); });
-  if (lastPos) $('coords-readout').textContent =
-    lastPos.coords.latitude.toFixed(5) + ', ' + lastPos.coords.longitude.toFixed(5);
+  // Arriba va el nombre de la calle (visual); las coordenadas solo van abajo.
+  updateTopStreet();
 }
 
 /* color automático según luminancia del fondo */
@@ -447,6 +536,38 @@ const shotCanvas = document.createElement('canvas');
 const blurCanvas = document.createElement('canvas');
 const BLUR_THRESHOLD = 60; // ajustable: menor = más permisivo
 
+/* ---- Relación de aspecto ---- */
+function aspectRatioValue() {
+  switch (config.aspect) {
+    case '4:3': return 4 / 3;
+    case '3:4': return 3 / 4;
+    case '16:9': return 16 / 9;
+    case '9:16': return 9 / 16;
+    case '1:1': return 1;
+    default: return null; // completa
+  }
+}
+function cropRectForAspect(vw, vh) {
+  const r = aspectRatioValue();
+  if (!r) return { sx: 0, sy: 0, sw: vw, sh: vh };
+  let sw, sh;
+  if (vw / vh > r) { sh = vh; sw = Math.round(vh * r); }
+  else { sw = vw; sh = Math.round(vw / r); }
+  return { sx: Math.round((vw - sw) / 2), sy: Math.round((vh - sh) / 2), sw, sh };
+}
+function updateAspectFrame() {
+  const f = $('aspect-frame');
+  if (!f) return;
+  const r = aspectRatioValue();
+  if (!r) { f.classList.remove('show'); return; }
+  f.classList.add('show');
+  const vw = window.innerWidth, vh = window.innerHeight;
+  let w = vw * 0.96, h = w / r;
+  if (h > vh * 0.66) { h = vh * 0.66; w = h * r; }
+  f.style.width = Math.round(w) + 'px';
+  f.style.height = Math.round(h) + 'px';
+}
+
 async function capturePhoto() {
   if (!video.videoWidth) { toast('La cámara aún no está lista'); return; }
   const gate = captureAllowed();
@@ -456,27 +577,76 @@ async function capturePhoto() {
   let turnedOn = false;
   if (config.flash && torchSupported && !torchOn) {
     try { await videoTrack.applyConstraints({ advanced: [{ torch: true }] }); turnedOn = true; await sleep(130); } catch (e) {}
-  } else if (config.flash && !torchSupported && isIOS) {
-    // sin linterna en iPhone web; se captura igual
   }
 
   const vw = video.videoWidth, vh = video.videoHeight;
-  shotCanvas.width = vw; shotCanvas.height = vh;
+  const { sx, sy, sw, sh } = cropRectForAspect(vw, vh);
+  shotCanvas.width = sw; shotCanvas.height = sh;
   const ctx = shotCanvas.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(video, 0, 0, vw, vh);
+  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
   const blurry = isBlurry(shotCanvas);
-  drawOverlayBottom(ctx, vw, vh, lastPos, new Date());
+  const now = new Date();
+  drawOverlayBottom(ctx, sw, sh, lastPos, now);
   flashScreen();
   shutterSound();
 
+  if (turnedOn) { try { await videoTrack.applyConstraints({ advanced: [{ torch: false }] }); } catch (e) {} }
+  macroOffAfterCapture(); // el macro se apaga tras tomar la foto
+
   shotCanvas.toBlob((blob) => {
     setThumb(blob);
-    saveBlob(blob);
+    const fname = `${config.filePrefix || 'foto'}_${tsName(now)}.jpg`;
+    const file = new File([blob], fname, { type: 'image/jpeg' });
+    handleCapturedFile(file, blob, now);
     if (blurry) toast('IMAGEN MOVIDA', 1000);
     afterCaptureAdvance();
+    checkBatchComplete();
   }, 'image/jpeg', 0.95);
+}
 
-  if (turnedOn) { try { await videoTrack.applyConstraints({ advanced: [{ torch: false }] }); } catch (e) {} }
+/* Decide qué hacer con cada foto: guardar, compartir, o acumular para el lote */
+function handleCapturedFile(file, blob, date) {
+  const mode = activeMode();
+  const inSeq = mode && mode.steps && mode.steps.length;
+  if (config.whatsapp && config.whatsappMode === 'complete' && inSeq) {
+    modeBatch.push({ file, stamp: stampOf(date) }); // se comparte/guarda todo al completar
+  } else if (config.whatsapp) {
+    shareFiles([file], waCaptionSingle(date));       // compartir esta foto (puedes enviar y guardar)
+  } else {
+    saveBlob(blob, file);                            // guardar según "Al guardar"
+  }
+}
+
+/* Si la secuencia del modo se completó, comparte todas las fotos juntas */
+function checkBatchComplete() {
+  const mode = activeMode();
+  if (!mode || !mode.steps || !mode.steps.length) return;
+  if (config.whatsapp && config.whatsappMode === 'complete' && stepIndex >= mode.steps.length && modeBatch.length) {
+    const files = modeBatch.map(b => b.file);
+    const caption = batchCaption(mode, modeBatch);
+    modeBatch = [];
+    shareFiles(files, caption);
+  }
+}
+function batchCaption(mode, batch) {
+  const parts = [];
+  if (mode && mode.waMessage) parts.push(mode.waMessage);
+  else if (config.customText) parts.push(config.customText);
+  if (mode && mode.name) parts.push('Modo: ' + mode.name);
+  if (batch.length) {
+    parts.push('Primera imagen: ' + batch[0].stamp);
+    parts.push('Última imagen: ' + batch[batch.length - 1].stamp);
+  }
+  const target = (mode && mode.waTarget) || config.whatsappTarget;
+  if (target) parts.push('Para: ' + target);
+  return parts.join('\n');
+}
+async function shareFiles(files, caption) {
+  if (navigator.canShare && navigator.canShare({ files })) {
+    try { await navigator.share({ files, text: caption }); toast('Elige WhatsApp y el chat, luego envía'); return; }
+    catch (e) { if (e && e.name === 'AbortError') return; }
+  }
+  toast('Compartir no está disponible aquí; las fotos quedaron guardadas');
 }
 
 /* Detección simple de imagen movida (varianza del laplaciano) */
@@ -501,29 +671,26 @@ function isBlurry(canvas) {
   } catch (e) { return false; }
 }
 
-function tsName() {
-  const d = new Date();
+function tsName(d) {
+  d = d || new Date();
   return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
+function stampOf(d) {
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
 function waCaption() { return buildLines(lastPos).join('\n'); }
+function waCaptionSingle(date) { return buildLines(lastPos, date).join('\n'); }
 
-async function saveBlob(blob) {
-  const fname = `${config.filePrefix || 'foto'}_${tsName()}.jpg`;
-  const file = new File([blob], fname, { type: 'image/jpeg' });
-  const wantShare = config.whatsapp || config.saveMode === 'share' || (config.saveMode === 'auto' && isIOS);
-
+async function saveBlob(blob, file) {
+  file = file || new File([blob], `${config.filePrefix || 'foto'}_${tsName()}.jpg`, { type: 'image/jpeg' });
+  const wantShare = config.saveMode === 'share' || (config.saveMode === 'auto' && isIOS);
   if (wantShare && navigator.canShare && navigator.canShare({ files: [file] })) {
-    try {
-      const data = { files: [file] };
-      if (config.whatsapp) data.text = waCaption();
-      await navigator.share(data);
-      toast(config.whatsapp ? 'Elige WhatsApp y el chat, luego envía' : 'Listo · guarda con "Guardar imagen"');
-      return;
-    } catch (e) { if (e && e.name === 'AbortError') return; }
+    try { await navigator.share({ files: [file] }); toast('Guarda con "Guardar imagen"'); return; }
+    catch (e) { if (e && e.name === 'AbortError') return; }
   }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+  a.href = url; a.download = file.name; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
   toast('Imagen guardada');
 }
@@ -591,6 +758,7 @@ function renderWheel() {
 }
 function selectMode(id, doScroll) {
   if (id === activeModeId) { stepIndex = 0; } else { activeModeId = id; stepIndex = 0; }
+  modeBatch = [];
   updateWheelActive();
   updateReminder();
   if (doScroll) scrollWheelTo(id, true);
@@ -649,7 +817,7 @@ function skipStep() {
   const m = activeMode();
   if (m && m.steps && stepIndex < m.steps.length) { stepIndex++; updateReminder(); }
 }
-function restartSeq() { stepIndex = 0; updateReminder(); }
+function restartSeq() { stepIndex = 0; modeBatch = []; updateReminder(); }
 
 /* =========================================================================
    CONFIGURACIÓN
@@ -662,6 +830,8 @@ function renderSettings() {
   $('cfg-color').value = config.textColor;
   $('cfg-shadow').checked = config.shadow;
   $('cfg-altitude').checked = config.showAltitude;
+  $('cfg-address').checked = config.showAddress;
+  $('cfg-aspect').value = config.aspect;
   $('cfg-decimals').value = String(config.decimals);
   $('cfg-save').value = config.saveMode;
   $('cfg-prefix').value = config.filePrefix;
@@ -671,6 +841,7 @@ function renderSettings() {
   $('cfg-torch-start').checked = config.torchStart;
   $('cfg-night').checked = config.nightMode;
   $('cfg-whatsapp').checked = config.whatsapp;
+  $('cfg-whatsapp-mode').value = config.whatsappMode;
   $('cfg-whatsapp-target').value = config.whatsappTarget || '';
   renderModesEditor();
 }
@@ -683,6 +854,8 @@ function bindSettings() {
   $('cfg-color').addEventListener('input', e => { config.textColor = e.target.value; saveConfig(); updateLiveOverlay(); });
   $('cfg-shadow').addEventListener('change', e => { config.shadow = e.target.checked; saveConfig(); updateLiveOverlay(); });
   $('cfg-altitude').addEventListener('change', e => { config.showAltitude = e.target.checked; saveConfig(); updateLiveOverlay(); });
+  $('cfg-address').addEventListener('change', e => { config.showAddress = e.target.checked; saveConfig(); if (config.showAddress) maybeReverseGeocode(); updateLiveOverlay(); });
+  $('cfg-aspect').addEventListener('change', e => { config.aspect = e.target.value; saveConfig(); updateAspectFrame(); });
   $('cfg-decimals').addEventListener('change', e => { config.decimals = parseInt(e.target.value, 10); saveConfig(); updateLiveOverlay(); });
   $('cfg-save').addEventListener('change', e => { config.saveMode = e.target.value; saveConfig(); });
   $('cfg-prefix').addEventListener('input', e => { config.filePrefix = e.target.value.replace(/[^\w\-]/g, '') || 'foto'; saveConfig(); });
@@ -708,6 +881,7 @@ function bindSettings() {
     }
   });
   $('cfg-whatsapp').addEventListener('change', e => { config.whatsapp = e.target.checked; saveConfig(); });
+  $('cfg-whatsapp-mode').addEventListener('change', e => { config.whatsappMode = e.target.value; saveConfig(); });
   $('cfg-whatsapp-target').addEventListener('input', e => { config.whatsappTarget = e.target.value; saveConfig(); });
   $('btn-open-share').addEventListener('click', () => showScreen('share'));
   $('btn-add-mode').addEventListener('click', addMode);
@@ -764,7 +938,23 @@ function renderModesEditor() {
       saveModes();
     });
 
-    card.append(head, hint, steps);
+    // WhatsApp por modo
+    const waWrap = document.createElement('div');
+    waWrap.className = 'mode-wa';
+    const waTarget = document.createElement('input');
+    waTarget.className = 'mode-wa-target';
+    waTarget.value = m.waTarget || '';
+    waTarget.placeholder = 'WhatsApp: chat o grupo (referencia)';
+    waTarget.addEventListener('input', e => { m.waTarget = e.target.value; saveModes(); });
+    const waMsg = document.createElement('textarea');
+    waMsg.className = 'mode-wa-msg';
+    waMsg.rows = 2;
+    waMsg.value = m.waMessage || '';
+    waMsg.placeholder = 'Mensaje al compartir (opcional). Se le añaden las horas de la 1ª y última imagen.';
+    waMsg.addEventListener('input', e => { m.waMessage = e.target.value; saveModes(); });
+    waWrap.append(waTarget, waMsg);
+
+    card.append(head, hint, steps, waWrap);
     list.appendChild(card);
   });
 }
@@ -836,7 +1026,7 @@ function currentBundle() {
   const sel = modes.filter(m => {
     const el = document.querySelector(`input[data-share-mode="${m.id}"]`);
     return el && el.checked;
-  }).map(m => ({ name: m.name, steps: m.steps || [] }));
+  }).map(m => ({ name: m.name, steps: m.steps || [], waTarget: m.waTarget || '', waMessage: m.waMessage || '' }));
   if (sel.length) b.modes = sel;
   return b;
 }
@@ -913,7 +1103,7 @@ function applyImport(b) {
   if (Array.isArray(b.modes) && b.modes.length) {
     b.modes.forEach(mm => {
       if (!mm || !mm.name) return;
-      modes.push({ id: slug(mm.name) + '_' + uid(), name: String(mm.name), steps: (mm.steps || []).map(s => String(s).trim()).filter(Boolean) });
+      modes.push({ id: slug(mm.name) + '_' + uid(), name: String(mm.name), steps: (mm.steps || []).map(s => String(s).trim()).filter(Boolean), waTarget: mm.waTarget || '', waMessage: mm.waMessage || '' });
     });
   }
   saveConfig(); saveModes();
@@ -1188,7 +1378,7 @@ function hideStartOverlay() { $('start-overlay').classList.remove('show'); }
 function bindControls() {
   $('shutter').addEventListener('click', () => { ensureHeading(); capturePhoto(); });
   $('btn-torch').addEventListener('click', toggleTorch);
-  $('btn-macro').addEventListener('click', macroCapture);
+  $('btn-macro').addEventListener('click', toggleMacro);
   $('btn-lens').addEventListener('click', switchLens);
   $('btn-settings').addEventListener('click', () => showScreen('settings'));
   $('btn-settings-back').addEventListener('click', () => showScreen('camera'));
@@ -1218,12 +1408,16 @@ function init() {
   renderWheel();
   updateLiveOverlay();
   updateCompass();
+  updateAspectFrame();
   tickClock();
   startGeo();
   applyOrientation();
   registerSW();
   maybeShowInstall();
   checkIncomingConfig();
+
+  window.addEventListener('resize', updateAspectFrame);
+  window.addEventListener('orientationchange', () => setTimeout(updateAspectFrame, 200));
 
   // La brújula (iOS) exige permiso desde un gesto: lo pedimos en la primera interacción.
   const kickHeading = () => { ensureHeading(); };
