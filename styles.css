@@ -25,10 +25,11 @@ input,textarea,select{font-family:inherit}
 
 /* ====== Conmutación de pantallas ====== */
 #screen-camera{position:fixed;inset:0;display:flex}
-#screen-settings,#screen-editor{position:fixed;inset:0;display:none;background:var(--bg);z-index:40}
+#screen-settings,#screen-editor,#screen-share{position:fixed;inset:0;display:none;background:var(--bg);z-index:40}
 body[data-screen="camera"] #screen-camera{display:flex}
 body[data-screen="settings"] #screen-settings{display:block}
 body[data-screen="editor"] #screen-editor{display:block}
+body[data-screen="share"] #screen-share{display:block}
 
 /* ====== Visor ====== */
 #viewfinder{position:absolute;inset:0;overflow:hidden;background:#000}
@@ -60,12 +61,8 @@ body[data-screen="editor"] #screen-editor{display:block}
 #coords-readout.ok{color:var(--accent)}
 #top-actions{display:flex;gap:10px;align-items:center}
 
-/* apartado oculto (editar galería): discreto, arriba al centro */
-#btn-editor{position:absolute;top:calc(var(--safe-t) + 6px);left:50%;transform:translateX(-50%);
-  z-index:13;background:rgba(255,255,255,.08);border:1px solid var(--stroke);
-  color:var(--muted);width:54px;height:22px;border-radius:999px;display:flex;
-  align-items:center;justify-content:center;gap:4px;font-size:11px;opacity:.55;
-  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+/* apartado oculto (editar galería): ahora es un icono discreto en la barra superior */
+#btn-editor{opacity:.78}
 #btn-editor:active{opacity:1}
 
 /* ====== Riel derecho de controles ====== */
@@ -126,6 +123,7 @@ body[data-screen="editor"] #screen-editor{display:block}
   color:rgba(255,255,255,.5);font-size:13px;font-weight:700;letter-spacing:.6px;
   text-transform:uppercase;padding:6px 12px;white-space:nowrap;transition:color .15s ease}
 .wheel-item.active{color:var(--accent)}
+.wheel-item.ghost{color:rgba(255,255,255,.55);text-transform:none;letter-spacing:.2px;font-weight:600}
 #wheel-dot{position:absolute;left:50%;bottom:-2px;transform:translateX(-50%);
   width:5px;height:5px;border-radius:50%;background:var(--accent);opacity:.9}
 
@@ -281,3 +279,62 @@ body[data-screen="editor"] #screen-editor{display:block}
   .round{width:42px;height:42px}
   #overlay{font-size:12px}
 }
+
+/* ====== Brújula (solo pantalla) ====== */
+#compass{display:none;flex-direction:column;align-items:center;gap:2px;
+  pointer-events:none;user-select:none}
+#compass.show{display:flex}
+#compass-rose{position:relative;width:40px;height:40px;border-radius:50%;
+  border:1px solid var(--stroke);background:rgba(0,0,0,.34);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  transition:transform .12s linear}
+#compass-rose span{position:absolute;font-size:8px;font-weight:700;color:var(--muted);
+  left:50%;top:50%;transform:translate(-50%,-50%)}
+#compass-rose .c-n{top:3px;color:var(--accent)}
+#compass-rose .c-s{top:auto;bottom:3px;transform:translate(-50%,0)}
+#compass-rose .c-e{left:auto;right:3px;transform:translate(0,-50%)}
+#compass-rose .c-w{left:3px;transform:translate(0,-50%)}
+.c-needle{position:absolute;left:50%;top:50%;width:2px;height:15px;
+  background:linear-gradient(to top,transparent,var(--accent));
+  transform:translate(-50%,-100%);transform-origin:bottom center;border-radius:2px}
+#compass-label{font-size:10px;font-weight:700;color:#fff;
+  background:rgba(0,0,0,.34);padding:1px 8px;border-radius:999px;
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);letter-spacing:.3px}
+
+/* ====== Banner instalar app ====== */
+#install-banner{position:absolute;left:0;right:0;
+  top:calc(var(--safe-t) + 56px);z-index:30;display:none;align-items:center;gap:10px;
+  margin:0 calc(12px + var(--safe-r)) 0 calc(12px + var(--safe-l));
+  padding:9px 10px 9px 14px;border-radius:14px;
+  background:var(--panel-solid);border:1px solid var(--stroke);
+  box-shadow:0 8px 24px rgba(0,0,0,.4)}
+#install-banner.show{display:flex}
+#install-text{flex:1;font-size:12.5px;color:var(--txt);line-height:1.35}
+#btn-install{flex:none;background:var(--accent);color:#1a1d11;font-weight:700;
+  font-size:13px;border:none;border-radius:999px;padding:7px 14px}
+#btn-install:active{transform:scale(.96)}
+#btn-install-close{flex:none;background:transparent;border:none;color:var(--muted);
+  font-size:15px;width:26px;height:26px;border-radius:50%}
+
+/* ====== Compartir: lista de modos ====== */
+.share-mode{display:flex;align-items:center;gap:12px;padding:12px 4px;
+  border-bottom:1px solid var(--stroke);font-size:14.5px;color:var(--txt)}
+.share-mode input{width:20px;height:20px;accent-color:var(--accent);flex:none}
+.share-mode span{flex:1}
+
+/* ====== Modal importar ====== */
+#import-modal{position:fixed;inset:0;z-index:60;display:none;
+  align-items:center;justify-content:center;padding:24px;
+  background:rgba(0,0,0,.62);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+#import-modal.show{display:flex}
+.modal-panel{width:100%;max-width:420px;background:var(--panel-solid);
+  border:1px solid var(--stroke);border-radius:18px;padding:20px;
+  box-shadow:0 20px 60px rgba(0,0,0,.6)}
+.modal-panel h2{margin:0 0 4px;font-size:18px}
+.modal-sub{margin:0 0 10px;font-size:13px;color:var(--muted)}
+#import-summary{margin:0 0 12px;padding:12px;border-radius:12px;
+  background:rgba(255,255,255,.05);border:1px solid var(--stroke);
+  font-size:13.5px;line-height:1.6;color:var(--txt);white-space:pre-wrap;
+  font-family:inherit;max-height:38vh;overflow:auto}
+.modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
+.modal-actions .map-ghost,.modal-actions .map-action{flex:1;text-align:center}
