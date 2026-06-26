@@ -33,7 +33,9 @@ const DEFAULT_CONFIG = {
   nightMode: false,        // linterna automática con poca luz
   whatsapp: false,         // compartir por WhatsApp tras capturar
   whatsappMode: 'each',    // each | complete (cada foto | todas al completar el modo)
-  whatsappTarget: ''       // chat/grupo por defecto (referencia)
+  whatsappTarget: '',      // chat/grupo por defecto (referencia)
+  useModes: false,         // false = cámara simple | true = sistema de modos
+  messageSpacing: 'normal' // none | normal | wide (espaciado en mensajes mejorados)
 };
 
 // Texto sembrado en versiones antiguas: si quedó guardado, se limpia (debe ir en blanco).
@@ -41,6 +43,11 @@ const LEGACY_SEED_TEXT = 'Departamento de Operación y Distribución [EEPA]';
 
 // Sin modos predeterminados: cada persona crea los suyos en Configuración.
 const DEFAULT_MODES = [];
+
+/* ---- Captura con Mensajes Mejorados ---- */
+let enhancedCaptureState = null; // { mode, photoIndex, data: [], total }
+let enhancedPhotoBatch = [];    // { blob, date, data } acumuladas
+let _enhancedCallback = null;   // callback para integrar con flujo normal
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -791,6 +798,13 @@ function buildExifGps(lat, lon, alt) {
 
 /* Decide qué hacer con cada foto: guardar, compartir, o acumular para el lote */
 function handleCapturedFile(file, blob, date) {
+  // Si estamos en un flujo de enhancedCapture, llamar al callback
+  if (window._enhancedCallback) {
+    window._enhancedCallback(file, blob, date);
+    window._enhancedCallback = null;
+    return;
+  }
+  
   const mode = activeMode();
   const inSeq = mode && mode.steps && mode.steps.length;
   if (config.whatsapp && config.whatsappMode === 'complete' && inSeq) {
@@ -1044,6 +1058,8 @@ function renderSettings() {
     dm.appendChild(o);
   });
   dm.value = (config.defaultMode && modes.some(m => m.id === config.defaultMode)) ? config.defaultMode : '';
+  $('cfg-use-modes').checked = config.useModes;
+  $('cfg-message-spacing').value = config.messageSpacing;
   renderModesEditor();
 }
 
@@ -1086,6 +1102,8 @@ function bindSettings() {
   $('cfg-whatsapp').addEventListener('change', e => { config.whatsapp = e.target.checked; saveConfig(); });
   $('cfg-whatsapp-mode').addEventListener('change', e => { config.whatsappMode = e.target.value; saveConfig(); });
   $('cfg-whatsapp-target').addEventListener('input', e => { config.whatsappTarget = e.target.value; saveConfig(); });
+  $('cfg-use-modes').addEventListener('change', e => { config.useModes = e.target.checked; saveConfig(); renderSettings(); });
+  $('cfg-message-spacing').addEventListener('change', e => { config.messageSpacing = e.target.value; saveConfig(); });
   $('btn-open-share').addEventListener('click', () => showScreen('share'));
   $('btn-add-mode').addEventListener('click', addMode);
   $('btn-reset').addEventListener('click', () => {
@@ -1157,10 +1175,178 @@ function renderModesEditor() {
     waMsg.addEventListener('input', e => { m.waMessage = e.target.value; saveModes(); });
     waWrap.append(waTarget, waMsg);
 
-    card.append(head, hint, steps, waWrap);
+    // Mensajes Mejorados
+    const emWrap = document.createElement('div');
+    emWrap.className = 'mode-em';
+    
+    const emToggle = document.createElement('label');
+    emToggle.className = 'switch-row';
+    const emText = document.createElement('span');
+    emText.textContent = 'Mensajes Mejorados (con datos)';
+    const emSwitch = document.createElement('label');
+    emSwitch.className = 'switch';
+    const emCheckbox = document.createElement('input');
+    emCheckbox.type = 'checkbox';
+    emCheckbox.checked = !!m.enhancedMessages;
+    const emSlider = document.createElement('span');
+    emSlider.className = 'slider';
+    emSwitch.append(emCheckbox, emSlider);
+    emToggle.append(emText, emSwitch);
+    
+    const emForm = document.createElement('div');
+    emForm.className = 'mode-em-form';
+    if (!m.enhancedMessages) emForm.style.display = 'none';
+    
+    // Campos de Mensaje Mejorado
+    const emTitle = createFieldGroup('Título del reporte', (v) => {
+      if (!m.enhancedMessages) m.enhancedMessages = { title: '', subtitle: '', photoCount: 1, steps: [], finalMessage: '' };
+      m.enhancedMessages.title = v;
+      saveModes();
+    }, m.enhancedMessages?.title || '');
+    
+    const emSubtitle = createFieldGroup('Subtítulo (ej: TD N°1)', (v) => {
+      if (!m.enhancedMessages) m.enhancedMessages = { title: '', subtitle: '', photoCount: 1, steps: [], finalMessage: '' };
+      m.enhancedMessages.subtitle = v;
+      saveModes();
+    }, m.enhancedMessages?.subtitle || '');
+    
+    const emPhotoCount = createFieldGroup('Cantidad de fotos', (v) => {
+      if (!m.enhancedMessages) m.enhancedMessages = { title: '', subtitle: '', photoCount: 1, steps: [], finalMessage: '' };
+      m.enhancedMessages.photoCount = Math.max(1, parseInt(v) || 1);
+      saveModes();
+    }, String(m.enhancedMessages?.photoCount || 1), 'number');
+    
+    const emStepsContainer = document.createElement('div');
+    emStepsContainer.className = 'mode-em-steps';
+    const emStepsTitle = document.createElement('div');
+    emStepsTitle.className = 'section-title';
+    emStepsTitle.textContent = 'Campos por imagen';
+    emStepsContainer.appendChild(emStepsTitle);
+    
+    const emStepsList = document.createElement('div');
+    emStepsList.className = 'mode-em-steps-list';
+    emStepsList.id = `em-steps-${i}`;
+    emStepsContainer.appendChild(emStepsList);
+    
+    const emAddStep = document.createElement('button');
+    emAddStep.className = 'mini-btn';
+    emAddStep.textContent = '+ Agregar campo';
+    emAddStep.addEventListener('click', () => {
+      if (!m.enhancedMessages) m.enhancedMessages = { title: '', subtitle: '', photoCount: 1, steps: [], finalMessage: '' };
+      m.enhancedMessages.steps.push({ type: 'input', label: '', placeholder: '', options: [], value: '' });
+      renderEnhancedSteps(i, m);
+      saveModes();
+    });
+    emStepsContainer.appendChild(emAddStep);
+    
+    const emFinalMessage = createFieldGroup('Mensaje final', (v) => {
+      if (!m.enhancedMessages) m.enhancedMessages = { title: '', subtitle: '', photoCount: 1, steps: [], finalMessage: '' };
+      m.enhancedMessages.finalMessage = v;
+      saveModes();
+    }, m.enhancedMessages?.finalMessage || '');
+    
+    emCheckbox.addEventListener('change', (e) => {
+      if (e.target.checked) {
+        if (!m.enhancedMessages) m.enhancedMessages = { title: '', subtitle: '', photoCount: 1, steps: [], finalMessage: '' };
+        emForm.style.display = 'block';
+      } else {
+        m.enhancedMessages = null;
+        emForm.style.display = 'none';
+      }
+      saveModes();
+    });
+    
+    emForm.append(emTitle, emSubtitle, emPhotoCount, emStepsContainer, emFinalMessage);
+    renderEnhancedSteps(i, m);
+    
+    emWrap.append(emToggle, emForm);
+    card.append(head, hint, steps, waWrap, emWrap);
     list.appendChild(card);
   });
 }
+
+function createFieldGroup(label, onChange, value, inputType = 'text') {
+  const div = document.createElement('div');
+  div.className = 'field';
+  const lbl = document.createElement('label');
+  lbl.textContent = label;
+  const inp = document.createElement(inputType === 'textarea' ? 'textarea' : 'input');
+  inp.type = inputType === 'textarea' ? '' : inputType;
+  if (inputType === 'textarea') inp.rows = 2;
+  inp.value = value;
+  inp.addEventListener('input', (e) => onChange(e.target.value));
+  div.append(lbl, inp);
+  return div;
+}
+
+function renderEnhancedSteps(modeIdx, mode) {
+  if (!mode.enhancedMessages) return;
+  const container = document.querySelector(`#em-steps-${modeIdx}`);
+  if (!container) return;
+  container.innerHTML = '';
+  
+  (mode.enhancedMessages.steps || []).forEach((step, si) => {
+    const stepDiv = document.createElement('div');
+    stepDiv.className = 'em-step-card';
+    
+    const stepType = document.createElement('select');
+    stepType.value = step.type;
+    ['text', 'input', 'options'].forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t;
+      opt.textContent = t === 'text' ? 'Solo texto' : (t === 'input' ? 'Entrada de usuario' : 'Opciones (seleccionar)');
+      stepType.appendChild(opt);
+    });
+    stepType.addEventListener('change', (e) => {
+      step.type = e.target.value;
+      renderEnhancedSteps(modeIdx, mode);
+      saveModes();
+    });
+    
+    const stepLabel = document.createElement('input');
+    stepLabel.type = 'text';
+    stepLabel.placeholder = 'Etiqueta (ej: ENROLLADO)';
+    stepLabel.value = step.label;
+    stepLabel.addEventListener('input', (e) => { step.label = e.target.value; saveModes(); });
+    
+    let stepExtra = null;
+    if (step.type === 'text') {
+      stepExtra = document.createElement('input');
+      stepExtra.type = 'text';
+      stepExtra.placeholder = 'Valor fijo (ej: imagen panorámica)';
+      stepExtra.value = step.value || '';
+      stepExtra.addEventListener('input', (e) => { step.value = e.target.value; saveModes(); });
+    } else if (step.type === 'input') {
+      stepExtra = document.createElement('input');
+      stepExtra.type = 'text';
+      stepExtra.placeholder = 'Placeholder (ej: escribe el número)';
+      stepExtra.value = step.placeholder || '';
+      stepExtra.addEventListener('input', (e) => { step.placeholder = e.target.value; saveModes(); });
+    } else if (step.type === 'options') {
+      stepExtra = document.createElement('textarea');
+      stepExtra.rows = 2;
+      stepExtra.placeholder = 'Opciones (una por línea): opción1\\nopción2\\nopción3';
+      stepExtra.value = (step.options || []).join('\n');
+      stepExtra.addEventListener('input', (e) => {
+        step.options = e.target.value.split('\n').map(s => s.trim()).filter(s => s);
+        saveModes();
+      });
+    }
+    
+    const stepDel = document.createElement('button');
+    stepDel.className = 'mini-btn';
+    stepDel.textContent = '✕';
+    stepDel.addEventListener('click', () => {
+      mode.enhancedMessages.steps.splice(si, 1);
+      renderEnhancedSteps(modeIdx, mode);
+      saveModes();
+    });
+    
+    stepDiv.append(stepType, stepLabel, stepExtra, stepDel);
+    container.appendChild(stepDiv);
+  });
+}
+
 function iconBtn(txt, title, fn) {
   const b = document.createElement('button');
   b.className = 'mini-btn'; b.textContent = txt; b.title = title;
@@ -1311,11 +1497,168 @@ function applyImport(b) {
   toast('✓ Configuración aplicada');
 }
 
+/* =========================================================================
+   MENSAJES MEJORADOS — Captura de datos antes de fotografiar
+   ========================================================================= */
+function initEnhancedCapture(mode) {
+  if (!mode.enhancedMessages) { doSimpleCapture(); return; }
+  enhancedCaptureState = { mode, photoIndex: 0, data: [], total: mode.enhancedMessages.photoCount || 1 };
+  enhancedPhotoBatch = [];
+  advanceEnhancedCapture();
+}
+
+function advanceEnhancedCapture() {
+  const st = enhancedCaptureState;
+  if (st.photoIndex >= st.total) { finishEnhancedCapture(); return; }
+  
+  const photoLabel = `Foto ${st.photoIndex + 1}/${st.total}`;
+  const steps = st.mode.enhancedMessages.steps || [];
+  showEnhancedDataModal(photoLabel, steps, (responses) => {
+    st.data.push({ photo: st.photoIndex + 1, responses });
+    doSimpleCapture(true); // captura, y en el callback llama a advanceEnhancedCapture
+  });
+}
+
+function showEnhancedDataModal(title, steps, onConfirm) {
+  const modal = $('enhanced-modal');
+  if (!modal) return;
+  
+  $('enhanced-title').textContent = title;
+  const form = $('enhanced-form');
+  form.innerHTML = '';
+  
+  steps.forEach((step, idx) => {
+    if (!step) return;
+    const label = document.createElement('label');
+    label.className = 'enhanced-field';
+    
+    const labelText = document.createElement('span');
+    labelText.className = 'field-label';
+    labelText.textContent = step.label || `Paso ${idx + 1}`;
+    label.appendChild(labelText);
+    
+    let input;
+    if (step.type === 'text') {
+      // solo muestra el texto
+      input = document.createElement('div');
+      input.className = 'field-display';
+      input.textContent = step.value || '';
+      input.dataset.stepIdx = idx;
+    } else if (step.type === 'input') {
+      // campo de entrada obligatorio
+      input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = step.placeholder || 'Escribe aquí...';
+      input.dataset.stepIdx = idx;
+      input.className = 'field-input';
+      input.required = true;
+    } else if (step.type === 'options') {
+      // selector de opciones
+      input = document.createElement('select');
+      input.dataset.stepIdx = idx;
+      input.className = 'field-select';
+      const opts = step.options || [];
+      opts.forEach(opt => {
+        const o = document.createElement('option');
+        o.value = opt;
+        o.textContent = opt;
+        input.appendChild(o);
+      });
+    }
+    
+    if (input) label.appendChild(input);
+    form.appendChild(label);
+  });
+  
+  $('enhanced-confirm').onclick = () => {
+    const responses = [];
+    const inputs = form.querySelectorAll('[data-step-idx]');
+    let valid = true;
+    inputs.forEach(inp => {
+      const idx = +inp.dataset.stepIdx;
+      const step = steps[idx];
+      if (step.type === 'input' && !inp.value) { valid = false; toast('Completa todos los campos'); return; }
+      responses.push(inp.value || inp.textContent);
+    });
+    if (!valid) return;
+    modal.classList.remove('show');
+    onConfirm(responses);
+  };
+  
+  modal.classList.add('show');
+}
+
+function finishEnhancedCapture() {
+  if (enhancedPhotoBatch.length === 0) { toast('Sin fotos para compartir'); return; }
+  
+  const caption = buildEnhancedCaption(enhancedCaptureState);
+  shareEnhancedBatch(enhancedPhotoBatch, caption);
+  
+  enhancedCaptureState = null;
+  enhancedPhotoBatch = [];
+}
+
+function buildEnhancedCaption(state) {
+  const m = state.mode.enhancedMessages;
+  const sp = config.messageSpacing === 'wide' ? '\n\n' : (config.messageSpacing === 'none' ? '' : '\n');
+  let txt = '';
+  
+  if (m.title) txt += m.title;
+  if (m.subtitle) txt += (txt ? sp : '') + m.subtitle;
+  
+  state.data.forEach((photo, idx) => {
+    if (txt && idx === 0) txt += sp;
+    const photoSteps = m.steps || [];
+    photo.responses.forEach((resp, si) => {
+      const step = photoSteps[si];
+      if (!step) return;
+      let line = '';
+      if (step.type === 'text') {
+        line = step.label + (step.value ? ': ' + step.value : '');
+      } else {
+        line = (step.label || `Foto ${photo.photo}`) + ': ' + resp;
+      }
+      txt += (txt && line ? sp : '') + line;
+    });
+  });
+  
+  if (m.finalMessage) txt += (txt ? sp : '') + m.finalMessage;
+  return txt;
+}
+
+async function shareEnhancedBatch(batch, caption) {
+  try {
+    if (navigator.share && navigator.canShare) {
+      const files = batch.map(b => new File([b.blob], `foto_${b.date.getTime()}.jpg`, { type: 'image/jpeg' }));
+      if (navigator.canShare({ files, text: caption })) {
+        await navigator.share({ files, text: caption, title: 'Reporte GeoCam' });
+        toast('Compartido');
+      } else {
+        copyText(caption); toast('Copié el mensaje. Abre WhatsApp y pega');
+      }
+    } else {
+      copyText(caption); toast('Copié el mensaje. Abre WhatsApp y pega');
+    }
+  } catch (e) { if (e.name !== 'AbortError') toast('Error al compartir'); }
+}
+
+function doSimpleCapture(isEnhanced) {
+  if (isEnhanced) {
+    window._enhancedCallback = (file, blob, date) => {
+      enhancedPhotoBatch.push({ blob, date, data: enhancedCaptureState.data[enhancedCaptureState.photoIndex] });
+      enhancedCaptureState.photoIndex++;
+      advanceEnhancedCapture();
+    };
+  }
+  // El usuario toca el obturador (o puede ser automático en el futuro)
+}
+
 function bindShare() {
   $('btn-share-back').addEventListener('click', () => showScreen('settings'));
   $('btn-share-send').addEventListener('click', doShareSend);
   $('btn-share-copy').addEventListener('click', doShareCopy);
 }
+
 
 /* Detecta enlace entrante #cfg= al abrir y lo aplica automáticamente */
 function checkIncomingConfig() {
@@ -1560,8 +1903,21 @@ function hideStartOverlay() { $('start-overlay').classList.remove('show'); }
 /* =========================================================================
    INICIO
    ========================================================================= */
+function handleCapture() {
+  // Si useModes está ON y el modo actual tiene enhancedMessages, iniciar flujo enhancedCapture
+  if (config.useModes) {
+    const mode = activeMode();
+    if (mode && mode.enhancedMessages) {
+      initEnhancedCapture(mode);
+      return;
+    }
+  }
+  // Si no, captura normal
+  capturePhoto();
+}
+
 function bindControls() {
-  $('shutter').addEventListener('click', () => { ensureHeading(); capturePhoto(); });
+  $('shutter').addEventListener('click', () => { ensureHeading(); handleCapture(); });
   $('btn-torch').addEventListener('click', toggleTorch);
   $('btn-macro').addEventListener('click', toggleMacro);
   $('btn-lens').addEventListener('click', switchLens);

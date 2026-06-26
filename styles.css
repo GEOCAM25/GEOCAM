@@ -391,3 +391,28 @@ body[data-screen="share"] #screen-share{display:block}
 @media (orientation: landscape) and (max-height: 600px){
   #zoom-badge{left:auto;right:124px;bottom:calc(var(--safe-b) + 50px);transform:none}
 }
+
+/* ====== Mensajes Mejorados ====== */
+#enhanced-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:99;align-items:center;justify-content:center}
+#enhanced-modal.show{display:flex}
+.modal-panel{background:#1a1a1a;border:1px solid var(--stroke);border-radius:12px;max-height:80vh;overflow-y:auto;padding:20px;width:90%;max-width:500px}
+.modal-panel h2{margin:0 0 20px;font-size:18px}
+#enhanced-form{display:flex;flex-direction:column;gap:14px;margin:16px 0}
+.enhanced-field{display:flex;flex-direction:column;gap:6px}
+.field-label{font-weight:600;font-size:13px;color:var(--accent)}
+.field-input,.field-select{background:#2a2a2a;border:1px solid var(--stroke);border-radius:6px;color:#fff;padding:10px;font-family:inherit}
+.field-display{background:#2a2a2a;border:1px solid var(--stroke);border-radius:6px;padding:10px;color:var(--muted)}
+.modal-actions{display:flex;gap:10px;margin-top:20px;justify-content:flex-end}
+
+.mode-em{border-top:1px solid var(--stroke);margin-top:16px;padding-top:16px}
+.mode-em .switch-row{margin-bottom:12px}
+.mode-em-form{display:none;margin-top:16px;padding:12px;background:rgba(201,214,70,.08);border-radius:8px;gap:14px;flex-direction:column}
+.mode-em-form>div{display:flex;flex-direction:column;gap:8px}
+.mode-em-form label{font-size:12px;font-weight:600;color:var(--accent)}
+.mode-em-form input,.mode-em-form textarea{background:#2a2a2a;border:1px solid var(--stroke);color:#fff;padding:8px;border-radius:6px;font-family:inherit}
+.mode-em-steps{margin:16px 0}
+.section-title{font-weight:800;font-size:12px;color:var(--accent);text-transform:uppercase;margin-bottom:10px;letter-spacing:.4px}
+.mode-em-steps-list{display:flex;flex-direction:column;gap:10px;margin-bottom:12px}
+.em-step-card{background:#2a2a2a;border:1px solid var(--stroke);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:8px}
+.em-step-card select,.em-step-card input,.em-step-card textarea{background:#1a1a1a;border:1px solid var(--stroke);color:#fff;padding:6px;border-radius:4px;font-size:12px}
+.em-step-card .mini-btn{align-self:flex-start;margin-top:4px}

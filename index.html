@@ -214,6 +214,21 @@
       </select>
     </div>
 
+    <div class="switch-row">
+      <span>Usar sistema de modos</span>
+      <label class="switch"><input type="checkbox" id="cfg-use-modes"><span class="slider"></span></label>
+    </div>
+    <p class="note" style="margin-top:-4px">Activar para usar modos con mensajes mejorados. Desactivar = cámara normal simple.</p>
+
+    <div class="field">
+      <label for="cfg-message-spacing">Espaciado en mensajes mejorados</label>
+      <select id="cfg-message-spacing">
+        <option value="none">Sin espacios</option>
+        <option value="normal">Normal</option>
+        <option value="wide">Amplio</option>
+      </select>
+    </div>
+
     <div class="row2">
       <div class="field">
         <label for="cfg-decimals">Decimales de coordenadas</label>
@@ -226,12 +241,15 @@
       <div class="field">
         <label for="cfg-save">Al guardar</label>
         <select id="cfg-save">
-          <option value="auto">Automático</option>
-          <option value="share">Compartir / Fotos</option>
+          <option value="auto">Automático (recomendado)</option>
+          <option value="share">Guardar en Fotos / galería</option>
           <option value="download">Descargar archivo</option>
         </select>
       </div>
     </div>
+    <p class="note" style="margin-top:-4px">
+      En iPhone, Safari <b>no permite</b> que una web guarde sola en Fotos. Con <b>Automático</b> o <b>Guardar en Fotos</b> se abre el menú de Compartir y tocas <b>“Guardar imagen”</b> (un toque) para dejarla en la galería. <b>Descargar archivo</b> la deja en Archivos (iPhone) o en Descargas (Android, visible en la galería). El guardado directo sin tocar nada solo es posible en la app nativa de Android.
+    </p>
 
     <div class="field">
       <label for="cfg-prefix">Nombre de archivo</label>
@@ -399,6 +417,17 @@
     </div>
   </div>
 </section>
+
+<!-- ============================ MODAL DATOS MEJORADOS ============================ -->
+<div id="enhanced-modal" class="modal">
+  <div class="modal-panel">
+    <h2 id="enhanced-title">Foto 1/3</h2>
+    <form id="enhanced-form"></form>
+    <div class="modal-actions">
+      <button id="enhanced-confirm" class="map-action">Capturar foto</button>
+    </div>
+  </div>
+</div>
 
 <div id="toast"></div>
 
