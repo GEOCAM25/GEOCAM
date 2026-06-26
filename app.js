@@ -24,6 +24,8 @@ const DEFAULT_CONFIG = {
   saveMode: 'auto',        // auto | share | download
   filePrefix: 'foto',
   aspect: 'full',          // full | 4:3 | 3:4 | 16:9 | 9:16 | 1:1
+  textScale: 1,            // tamaño del texto en la imagen (0.8 a 1.5)
+  defaultMode: '',         // id del modo por defecto al abrir ('' = el primero / libre)
   compass: true,           // brújula en pantalla (nunca en la foto)
   sound: false,            // sonido al capturar (por defecto silencio)
   flash: false,            // flash al capturar (usa linterna)
@@ -78,6 +80,7 @@ let stream = null, videoTrack = null, currentDeviceId = null;
 let lensList = [], lensIndex = 0;
 let torchOn = false, torchSupported = false, torchAutoOn = false;
 let cameraStarting = false;
+let zoom = 1, zoomMin = 1, zoomMax = 5, zoomStep = 0.1, nativeZoom = false;
 
 /* ---------------- Geo / brújula ---------------- */
 let lastPos = null, geoWatch = null, lastHeading = null, headingBound = false, headingState = 'idle';
@@ -86,7 +89,9 @@ let lastPos = null, geoWatch = null, lastHeading = null, headingBound = false, h
 let liveAutoColor = null;
 
 /* ---------------- Modos ---------------- */
-let activeModeId = (modes[0] && modes[0].id) || 'libre';
+let activeModeId = (config.defaultMode && modes.some(m => m.id === config.defaultMode))
+  ? config.defaultMode
+  : ((modes[0] && modes[0].id) || 'libre');
 let stepIndex = 0;
 let macroActive = false;          // botón macro: solo enfoque cercano (no captura)
 let modeBatch = [];               // fotos acumuladas del modo para compartir juntas
@@ -128,7 +133,8 @@ async function startCamera(deviceId) {
   cameraStarting = true;
   hideStartOverlay();
   stopStream();
-  const base = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+  // Pide la mayor resolución posible (el navegador elige la mejor del sensor)
+  const base = { width: { ideal: 4096 }, height: { ideal: 2160 } };
   const constraints = {
     audio: false,
     video: deviceId ? Object.assign({ deviceId: { exact: deviceId } }, base)
@@ -145,6 +151,13 @@ async function startCamera(deviceId) {
   try { await video.play(); } catch (e) {}
   videoTrack = stream.getVideoTracks()[0];
   try { currentDeviceId = videoTrack.getSettings().deviceId || deviceId || null; } catch (e) {}
+  // Sube a la resolución máxima del equipo si está disponible
+  try {
+    const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+    if (caps.width && caps.height && caps.width.max && caps.height.max) {
+      await videoTrack.applyConstraints({ width: { ideal: caps.width.max }, height: { ideal: caps.height.max } });
+    }
+  } catch (e) {}
   detectTorch();
   await enumerateCams();
   // Autoenfoque continuo si el equipo lo permite (mejora el enfoque general)
@@ -155,6 +168,16 @@ async function startCamera(deviceId) {
     }
   } catch (e) {}
   macroActive = false; $('btn-macro').classList.remove('active');
+  // Zoom: usa el del hardware si existe (Android); si no, zoom digital (iPhone)
+  try {
+    const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+    if (caps.zoom && typeof caps.zoom.max === 'number') {
+      nativeZoom = true; zoomMin = caps.zoom.min || 1; zoomMax = caps.zoom.max; zoomStep = caps.zoom.step || 0.1;
+    } else {
+      nativeZoom = false; zoomMin = 1; zoomMax = 5; zoomStep = 0.1;
+    }
+  } catch (e) { nativeZoom = false; zoomMin = 1; zoomMax = 5; zoomStep = 0.1; }
+  zoom = zoomMin; applyZoom(zoom);
   // Linterna siempre encendida al abrir
   if (config.torchStart && torchSupported && !torchOn) {
     try { await videoTrack.applyConstraints({ advanced: [{ torch: true }] }); torchOn = true; $('btn-torch').classList.add('on'); } catch (e) {}
@@ -162,6 +185,43 @@ async function startCamera(deviceId) {
   cameraStarting = false;
   updateAspectFrame();
   updateLiveOverlay();
+}
+
+/* ---- Zoom (pinza con dos dedos) ---- */
+function applyZoom(z) {
+  zoom = Math.min(zoomMax, Math.max(zoomMin, z));
+  if (nativeZoom && videoTrack) {
+    try { videoTrack.applyConstraints({ advanced: [{ zoom: zoom }] }); } catch (e) {}
+    video.style.transform = '';
+  } else {
+    video.style.transformOrigin = 'center center';
+    video.style.transform = zoom > 1.01 ? `scale(${zoom})` : '';
+  }
+  const badge = $('zoom-badge');
+  if (badge) {
+    const rel = nativeZoom ? (zoom / (zoomMin || 1)) : zoom;
+    badge.textContent = rel.toFixed(1) + '×';
+    badge.classList.toggle('show', zoom > zoomMin + 0.02);
+  }
+}
+function resetZoom() { applyZoom(zoomMin); }
+let pinchStartDist = 0, pinchStartZoom = 1;
+function touchDist(t) { const dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY; return Math.hypot(dx, dy); }
+function bindPinch() {
+  const z = $('viewfinder-tap');
+  z.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) { pinchStartDist = touchDist(e.touches); pinchStartZoom = zoom; }
+  }, { passive: true });
+  z.addEventListener('touchmove', (e) => {
+    if (e.touches.length === 2 && pinchStartDist > 0) {
+      e.preventDefault();
+      const d = touchDist(e.touches);
+      applyZoom(pinchStartZoom * (d / pinchStartDist));
+    }
+  }, { passive: false });
+  z.addEventListener('touchend', (e) => {
+    if (e.touches.length < 2) pinchStartDist = 0;
+  }, { passive: true });
 }
 
 async function enumerateCams() {
@@ -250,9 +310,34 @@ function macroOffAfterCapture() {
   if (macroActive) { macroActive = false; $('btn-macro').classList.remove('active'); restoreFocus(); }
 }
 
+/* ---- Deslizar izquierda/derecha para cambiar de modo (estilo iPhone) ---- */
+let swipeX = null, swipeY = null, swipeMoved = false;
+function bindSwipe() {
+  const z = $('viewfinder-tap');
+  z.addEventListener('touchstart', (e) => {
+    if (e.touches.length > 1) { swipeX = null; return; } // dos dedos = zoom, no deslizar
+    const t = e.touches[0]; swipeX = t.clientX; swipeY = t.clientY; swipeMoved = false;
+  }, { passive: true });
+  z.addEventListener('touchmove', (e) => {
+    if (swipeX == null) return;
+    const t = e.touches[0];
+    if (Math.abs(t.clientX - swipeX) > 12 || Math.abs(t.clientY - swipeY) > 12) swipeMoved = true;
+  }, { passive: true });
+  z.addEventListener('touchend', (e) => {
+    if (swipeX == null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - swipeX, dy = t.clientY - swipeY;
+    swipeX = swipeY = null;
+    if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.6) {
+      stepMode(dx < 0 ? 1 : -1); // izquierda = siguiente, derecha = anterior
+    }
+  }, { passive: true });
+}
+
 /* ---- Tocar para enfocar ---- */
 function onViewfinderTap(e) {
   if (!isScreen('camera')) return;
+  if (swipeMoved) { swipeMoved = false; return; } // fue un deslizamiento, no un toque
   ensureHeading();
   const t = e.touches && e.touches[0] ? e.touches[0] : e;
   showFocusRing(t.clientX, t.clientY);
@@ -372,7 +457,7 @@ async function ensureHeading() {
     let h = null;
     if (typeof ev.webkitCompassHeading === 'number') h = ev.webkitCompassHeading;          // iOS: norte real
     else if (ev.absolute && typeof ev.alpha === 'number') h = (360 - ev.alpha) % 360;       // Android absoluto
-    if (h != null && !isNaN(h)) { lastHeading = h; updateCompass(); }
+    if (h != null && !isNaN(h)) { lastHeading = h; scheduleCompass(); }
   };
   if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
     try {
@@ -384,32 +469,38 @@ async function ensureHeading() {
   window.addEventListener('deviceorientation', handler, true);
   headingBound = true; headingState = 'on'; updateCompass();
 }
+const CARD8 = ['Norte', 'Nororiente', 'Oriente', 'Suroriente', 'Sur', 'Surponiente', 'Poniente', 'Norponiente'];
 function cardinalES(h) {
   h = ((h % 360) + 360) % 360;
-  if (h >= 315 || h < 45) return 'Norte';
-  if (h < 135) return 'Oriente';
-  if (h < 225) return 'Sur';
-  return 'Poniente';
+  return CARD8[Math.round(h / 45) % 8];
+}
+let compassRAF = 0;
+function scheduleCompass() {
+  if (compassRAF) return;
+  compassRAF = requestAnimationFrame(() => { compassRAF = 0; updateCompass(); });
 }
 function updateCompass() {
   const wrap = $('compass');
   if (!config.compass) { wrap.classList.remove('show'); return; }
   wrap.classList.add('show');
+  const arc = $('compass-arc');
   const label = $('compass-label');
-  const strip = $('compass-strip');
-  const marks = strip ? strip.querySelectorAll('.cm') : [];
+  const marks = arc ? arc.querySelectorAll('.cm') : [];
   if (lastHeading == null) {
     label.textContent = headingState === 'denied' ? 'sin permiso' : 'tocar';
     marks.forEach(el => { el.style.display = 'none'; });
     return;
   }
-  const W = 210, pxPerDeg = W / 140; // ~140° visibles a lo ancho
+  const W = arc.clientWidth || 280, R = 150, cx = W / 2;
   marks.forEach(el => {
     const b = +el.dataset.deg;
-    let diff = ((b - lastHeading + 540) % 360) - 180; // diferencia más corta [-180,180]
-    const x = W / 2 + diff * pxPerDeg;
-    if (x < -14 || x > W + 14) { el.style.display = 'none'; }
-    else { el.style.display = ''; el.style.left = x + 'px'; }
+    let diff = ((b - lastHeading + 540) % 360) - 180; // [-180,180]
+    if (Math.abs(diff) > 74) { el.style.display = 'none'; return; }
+    const t = diff * Math.PI / 180;
+    el.style.display = '';
+    el.style.left = (cx + R * Math.sin(t)) + 'px';
+    el.style.top = (10 + R - R * Math.cos(t)) + 'px';   // 10px = desfase del arco visible
+    el.style.opacity = String(Math.max(0.28, 1 - Math.abs(diff) / 82));
   });
   label.textContent = cardinalES(lastHeading).toUpperCase();
 }
@@ -443,6 +534,7 @@ function buildLines(pos, date) {
 
 function updateLiveOverlay() {
   const ov = $('overlay');
+  document.documentElement.style.setProperty('--ov-scale', config.textScale || 1);
   const lines = buildLines(lastPos);
   ov.style.textAlign = config.align;
   ov.style.color = (config.colorMode === 'auto' && liveAutoColor) ? liveAutoColor : (config.textColor || '#C9D646');
@@ -496,7 +588,8 @@ function overlayAnchorX(w) {
 }
 function drawOverlayBottom(ctx, w, h, pos, date) {
   const lines = buildLines(pos, date);
-  const fontPx = Math.max(14, Math.round(Math.min(w, h) * 0.033));
+  const scale = config.textScale || 1;
+  const fontPx = Math.max(12, Math.round(Math.min(w, h) * 0.033 * scale));
   const lh = Math.round(fontPx * 1.34);
   const blockH = lh * lines.length;
   const topY = h - Math.round(h * 0.03) - blockH;
@@ -583,7 +676,13 @@ async function capturePhoto() {
   const { sx, sy, sw, sh } = cropRectForAspect(vw, vh);
   shotCanvas.width = sw; shotCanvas.height = sh;
   const ctx = shotCanvas.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+  // Zoom digital (iPhone): recorta el centro y lo escala; el óptico ya viene aplicado.
+  let srcX = sx, srcY = sy, srcW = sw, srcH = sh;
+  if (!nativeZoom && zoom > 1.01) {
+    srcW = sw / zoom; srcH = sh / zoom;
+    srcX = sx + (sw - srcW) / 2; srcY = sy + (sh - srcH) / 2;
+  }
+  ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, sw, sh);
   const blurry = isBlurry(shotCanvas);
   const now = new Date();
   drawOverlayBottom(ctx, sw, sh, lastPos, now);
@@ -593,15 +692,101 @@ async function capturePhoto() {
   if (turnedOn) { try { await videoTrack.applyConstraints({ advanced: [{ torch: false }] }); } catch (e) {} }
   macroOffAfterCapture(); // el macro se apaga tras tomar la foto
 
-  shotCanvas.toBlob((blob) => {
-    setThumb(blob);
+  shotCanvas.toBlob(async (blob) => {
+    // Graba el GPS real en el archivo (EXIF), así la galería ubica la foto en el mapa
+    if (lastPos && lastPos.coords && typeof lastPos.coords.latitude === 'number') {
+      try { blob = await insertExifGps(blob, lastPos.coords.latitude, lastPos.coords.longitude, lastPos.coords.altitude); } catch (e) {}
+    }
     const fname = `${config.filePrefix || 'foto'}_${tsName(now)}.jpg`;
     const file = new File([blob], fname, { type: 'image/jpeg' });
+    setThumb(blob);
     handleCapturedFile(file, blob, now);
     if (blurry) toast('IMAGEN MOVIDA', 1000);
     afterCaptureAdvance();
     checkBatchComplete();
   }, 'image/jpeg', 0.95);
+}
+
+/* =========================================================================
+   EXIF GPS — escribe las coordenadas reales dentro del archivo JPEG.
+   Sin librerías: arma un bloque APP1/Exif mínimo solo con GPS y lo inserta.
+   No sube nada a internet; queda solo en el archivo del teléfono.
+   ========================================================================= */
+async function insertExifGps(blob, lat, lon, alt) {
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  if (buf[0] !== 0xFF || buf[1] !== 0xD8) return blob; // no es JPEG válido
+  const exif = buildExifGps(lat, lon, alt);
+  // Inserta el segmento APP1 justo después del SOI (FFD8)
+  const out = new Uint8Array(2 + exif.length + (buf.length - 2));
+  out.set(buf.subarray(0, 2), 0);
+  out.set(exif, 2);
+  out.set(buf.subarray(2), 2 + exif.length);
+  return new Blob([out], { type: 'image/jpeg' });
+}
+function buildExifGps(lat, lon, alt) {
+  const latRef = lat < 0 ? 'S' : 'N';
+  const lonRef = lon < 0 ? 'W' : 'E';
+  const dms = (v) => { v = Math.abs(v); const d = Math.floor(v); const mf = (v - d) * 60; const m = Math.floor(mf); const s = (mf - m) * 60; return [[d, 1], [m, 1], [Math.round(s * 10000), 10000]]; };
+  const latD = dms(lat), lonD = dms(lon);
+  const hasAlt = (alt != null && !isNaN(alt));
+  const altRef = (hasAlt && alt < 0) ? 1 : 0;
+  const altVal = hasAlt ? Math.round(Math.abs(alt) * 100) : 0;
+
+  // TIFF little-endian. Offsets relativos al inicio del TIFF.
+  const tiff = new Uint8Array(256);
+  const dv = new DataView(tiff.buffer);
+  let p = 0;
+  dv.setUint8(p++, 0x49); dv.setUint8(p++, 0x49);   // "II"
+  dv.setUint16(p, 42, true); p += 2;                 // 42
+  dv.setUint32(p, 8, true); p += 2 + 2;              // offset a IFD0 = 8 (p pasa a 8)
+
+  // IFD0 en offset 8: 1 entrada (puntero a GPS IFD)
+  let o = 8;
+  dv.setUint16(o, 1, true); o += 2;                  // num entradas
+  dv.setUint16(o, 0x8825, true); o += 2;             // GPS IFD pointer
+  dv.setUint16(o, 4, true); o += 2;                  // tipo LONG
+  dv.setUint32(o, 1, true); o += 4;                  // count
+  const gpsIfdOffset = 26;
+  dv.setUint32(o, gpsIfdOffset, true); o += 4;       // valor = offset GPS IFD
+  dv.setUint32(o, 0, true); o += 4;                  // next IFD = 0
+
+  // GPS IFD en offset 26: 7 entradas
+  let g = gpsIfdOffset;
+  dv.setUint16(g, 7, true); g += 2;
+  const dataStart = gpsIfdOffset + 2 + 7 * 12 + 4;   // = 116
+  let dptr = dataStart;
+  const entry = (tag, type, count, valueWriter, inline) => {
+    dv.setUint16(g, tag, true); g += 2;
+    dv.setUint16(g, type, true); g += 2;
+    dv.setUint32(g, count, true); g += 4;
+    if (inline) { valueWriter(g); g += 4; }
+    else { dv.setUint32(g, dptr, true); g += 4; dptr += valueWriter(dptr); }
+  };
+  // GPSVersionID 2,3,0,0
+  entry(0x0000, 1, 4, (at) => { dv.setUint8(at, 2); dv.setUint8(at + 1, 3); dv.setUint8(at + 2, 0); dv.setUint8(at + 3, 0); }, true);
+  // GPSLatitudeRef
+  entry(0x0001, 2, 2, (at) => { dv.setUint8(at, latRef.charCodeAt(0)); dv.setUint8(at + 1, 0); }, true);
+  // GPSLatitude (3 rationals)
+  entry(0x0002, 5, 3, (at) => { latD.forEach((r, i) => { dv.setUint32(at + i * 8, r[0], true); dv.setUint32(at + i * 8 + 4, r[1], true); }); return 24; }, false);
+  // GPSLongitudeRef
+  entry(0x0003, 2, 2, (at) => { dv.setUint8(at, lonRef.charCodeAt(0)); dv.setUint8(at + 1, 0); }, true);
+  // GPSLongitude
+  entry(0x0004, 5, 3, (at) => { lonD.forEach((r, i) => { dv.setUint32(at + i * 8, r[0], true); dv.setUint32(at + i * 8 + 4, r[1], true); }); return 24; }, false);
+  // GPSAltitudeRef (BYTE)
+  entry(0x0005, 1, 1, (at) => { dv.setUint8(at, altRef); }, true);
+  // GPSAltitude (1 rational)
+  entry(0x0006, 5, 1, (at) => { dv.setUint32(at, altVal, true); dv.setUint32(at + 4, 100, true); return 8; }, false);
+  dv.setUint32(g, 0, true); g += 4;                  // next IFD = 0
+
+  const tiffLen = dptr;                              // largo real usado
+  // Envoltura APP1: FFE1 + length(BE) + "Exif\0\0" + TIFF
+  const payloadLen = 6 + tiffLen;                    // "Exif\0\0" + tiff
+  const app1 = new Uint8Array(2 + 2 + payloadLen);
+  app1[0] = 0xFF; app1[1] = 0xE1;
+  app1[2] = (payloadLen + 2) >> 8; app1[3] = (payloadLen + 2) & 0xFF;
+  app1.set([0x45, 0x78, 0x69, 0x66, 0x00, 0x00], 4); // "Exif\0\0"
+  app1.set(tiff.subarray(0, tiffLen), 10);
+  return app1;
 }
 
 /* Decide qué hacer con cada foto: guardar, compartir, o acumular para el lote */
@@ -766,6 +951,13 @@ function selectMode(id, doScroll) {
 function updateWheelActive() {
   [...$('wheel').children].forEach(c => c.classList.toggle('active', c.dataset.id === activeModeId));
 }
+function stepMode(dir) {
+  if (!modes.length) return;
+  let i = modes.findIndex(m => m.id === activeModeId);
+  if (i < 0) i = 0;
+  i = (i + dir + modes.length) % modes.length;
+  selectMode(modes[i].id, true);
+}
 function scrollWheelTo(id, smooth) {
   const wheel = $('wheel');
   const el = [...wheel.children].find(c => c.dataset.id === id);
@@ -832,6 +1024,7 @@ function renderSettings() {
   $('cfg-altitude').checked = config.showAltitude;
   $('cfg-address').checked = config.showAddress;
   $('cfg-aspect').value = config.aspect;
+  $('cfg-text-size').value = String(config.textScale);
   $('cfg-decimals').value = String(config.decimals);
   $('cfg-save').value = config.saveMode;
   $('cfg-prefix').value = config.filePrefix;
@@ -843,6 +1036,14 @@ function renderSettings() {
   $('cfg-whatsapp').checked = config.whatsapp;
   $('cfg-whatsapp-mode').value = config.whatsappMode;
   $('cfg-whatsapp-target').value = config.whatsappTarget || '';
+  const dm = $('cfg-default-mode');
+  dm.innerHTML = '<option value="">Primero de la lista</option>';
+  modes.forEach(m => {
+    const o = document.createElement('option');
+    o.value = m.id; o.textContent = m.name;
+    dm.appendChild(o);
+  });
+  dm.value = (config.defaultMode && modes.some(m => m.id === config.defaultMode)) ? config.defaultMode : '';
   renderModesEditor();
 }
 
@@ -856,6 +1057,8 @@ function bindSettings() {
   $('cfg-altitude').addEventListener('change', e => { config.showAltitude = e.target.checked; saveConfig(); updateLiveOverlay(); });
   $('cfg-address').addEventListener('change', e => { config.showAddress = e.target.checked; saveConfig(); if (config.showAddress) maybeReverseGeocode(); updateLiveOverlay(); });
   $('cfg-aspect').addEventListener('change', e => { config.aspect = e.target.value; saveConfig(); updateAspectFrame(); });
+  $('cfg-text-size').addEventListener('change', e => { config.textScale = parseFloat(e.target.value); saveConfig(); updateLiveOverlay(); });
+  $('cfg-default-mode').addEventListener('change', e => { config.defaultMode = e.target.value; saveConfig(); });
   $('cfg-decimals').addEventListener('change', e => { config.decimals = parseInt(e.target.value, 10); saveConfig(); updateLiveOverlay(); });
   $('cfg-save').addEventListener('change', e => { config.saveMode = e.target.value; saveConfig(); });
   $('cfg-prefix').addEventListener('input', e => { config.filePrefix = e.target.value.replace(/[^\w\-]/g, '') || 'foto'; saveConfig(); });
@@ -1002,11 +1205,21 @@ async function applyOrientation() {
    COMPARTIR / IMPORTAR CONFIGURACIÓN
    (solo manual + confirmación; nada se sincroniza solo)
    ========================================================================= */
+const SHAREABLE_KEYS = ['customText', 'orientation', 'align', 'colorMode', 'textColor', 'shadow',
+  'showAltitude', 'showAddress', 'decimals', 'saveMode', 'filePrefix', 'aspect', 'textScale',
+  'compass', 'sound', 'flash', 'torchStart', 'nightMode', 'whatsapp', 'whatsappMode', 'whatsappTarget'];
+function pickSettings() { const o = {}; SHAREABLE_KEYS.forEach(k => { o[k] = config[k]; }); return o; }
+
 function renderShareScreen() {
-  $('chk-share-text').checked = true;
-  $('chk-share-color').checked = true;
+  $('chk-share-settings').checked = true;
   const list = $('share-modes-list');
   list.innerHTML = '';
+  if (!modes.length) {
+    const p = document.createElement('p'); p.className = 'note'; p.style.margin = '0';
+    p.textContent = 'No tienes modos creados todavía.';
+    list.appendChild(p);
+    return;
+  }
   modes.forEach(m => {
     const row = document.createElement('label');
     row.className = 'share-mode';
@@ -1020,9 +1233,8 @@ function renderShareScreen() {
   });
 }
 function currentBundle() {
-  const b = { v: 2 };
-  if ($('chk-share-text').checked) b.text = config.customText;
-  if ($('chk-share-color').checked) { b.colorMode = config.colorMode; b.textColor = config.textColor; b.shadow = config.shadow; }
+  const b = { v: 3 };
+  if ($('chk-share-settings').checked) b.settings = pickSettings();
   const sel = modes.filter(m => {
     const el = document.querySelector(`input[data-share-mode="${m.id}"]`);
     return el && el.checked;
@@ -1030,7 +1242,7 @@ function currentBundle() {
   if (sel.length) b.modes = sel;
   return b;
 }
-function bundleIsEmpty(b) { return b.text == null && !b.colorMode && !Array.isArray(b.modes); }
+function bundleIsEmpty(b) { return !b || (!b.settings && !(Array.isArray(b.modes) && b.modes.length) && b.text == null && !b.colorMode); }
 
 function encodeBundle(b) {
   const bytes = new TextEncoder().encode(JSON.stringify(b));
@@ -1059,87 +1271,60 @@ function fallbackCopy(t) {
 
 async function doShareSend() {
   const b = currentBundle();
-  if (bundleIsEmpty(b)) { toast('Selecciona algo para compartir'); return; }
+  if (bundleIsEmpty(b)) { toast('Marca algo para compartir'); return; }
   const url = shareLink(b);
   if (navigator.share) {
-    try { await navigator.share({ title: 'Configuración GeoCam', text: 'Abre este enlace en GeoCam para importar mi configuración:', url }); return; }
+    try { await navigator.share({ title: 'Configuración GeoCam', text: 'Abre este enlace para configurar GeoCam igual que yo:', url }); return; }
     catch (e) { if (e && e.name === 'AbortError') return; }
   }
   copyText(url); toast('Enlace copiado al portapapeles');
 }
 function doShareCopy() {
   const b = currentBundle();
-  if (bundleIsEmpty(b)) { toast('Selecciona algo para compartir'); return; }
+  if (bundleIsEmpty(b)) { toast('Marca algo para compartir'); return; }
   copyText(shareLink(b)); toast('Enlace copiado');
 }
-function doShareFile() {
-  const b = currentBundle();
-  if (bundleIsEmpty(b)) { toast('Selecciona algo para exportar'); return; }
-  const blob = new Blob([JSON.stringify(b, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'geocam-config.json'; document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
-  toast('Archivo exportado');
-}
 
-function openImportModal(b) {
-  if (!b || bundleIsEmpty(b)) { toast('No hay nada que importar'); return; }
-  pendingImport = b;
-  const parts = [];
-  if (b.text != null) parts.push('• Texto personalizado');
-  if (b.colorMode) parts.push('• Color y sombreado del texto');
-  if (Array.isArray(b.modes) && b.modes.length) parts.push(`• ${b.modes.length} modo(s): ${b.modes.map(m => m.name).join(', ')}`);
-  $('import-summary').textContent = parts.join('\n');
-  $('import-modal').classList.add('show');
-}
+/* Aplica la configuración recibida (automático al abrir el enlace) */
 function applyImport(b) {
-  if (b.text != null) config.customText = b.text;
-  if (b.colorMode) {
-    config.colorMode = b.colorMode;
-    if (b.textColor) config.textColor = b.textColor;
-    if (typeof b.shadow === 'boolean') config.shadow = b.shadow;
+  if (!b) return;
+  if (b.settings && typeof b.settings === 'object') {
+    SHAREABLE_KEYS.forEach(k => { if (b.settings[k] !== undefined) config[k] = b.settings[k]; });
   }
-  if (Array.isArray(b.modes) && b.modes.length) {
-    b.modes.forEach(mm => {
-      if (!mm || !mm.name) return;
-      modes.push({ id: slug(mm.name) + '_' + uid(), name: String(mm.name), steps: (mm.steps || []).map(s => String(s).trim()).filter(Boolean), waTarget: mm.waTarget || '', waMessage: mm.waMessage || '' });
-    });
+  // compatibilidad con enlaces antiguos
+  if (b.text != null) config.customText = b.text;
+  if (b.colorMode) { config.colorMode = b.colorMode; if (b.textColor) config.textColor = b.textColor; if (typeof b.shadow === 'boolean') config.shadow = b.shadow; }
+  // modos: reemplaza por los del que comparte (queda igual que él)
+  if (Array.isArray(b.modes)) {
+    modes = b.modes.filter(mm => mm && mm.name).map(mm => ({
+      id: slug(mm.name) + '_' + uid(),
+      name: String(mm.name),
+      steps: (mm.steps || []).map(s => String(s).trim()).filter(Boolean),
+      waTarget: mm.waTarget || '', waMessage: mm.waMessage || ''
+    }));
+    activeModeId = modes[0] ? modes[0].id : 'libre';
+    stepIndex = 0; modeBatch = [];
   }
   saveConfig(); saveModes();
-  renderSettings(); renderWheel(); updateLiveOverlay(); updateCompass();
-  toast('Configuración importada');
+  if (isScreen('settings')) renderSettings();
+  renderWheel(); updateLiveOverlay(); updateCompass(); updateAspectFrame();
+  toast('✓ Configuración aplicada');
 }
 
 function bindShare() {
   $('btn-share-back').addEventListener('click', () => showScreen('settings'));
   $('btn-share-send').addEventListener('click', doShareSend);
   $('btn-share-copy').addEventListener('click', doShareCopy);
-  $('btn-share-file').addEventListener('click', doShareFile);
-  $('share-import-file').addEventListener('change', e => {
-    const f = e.target.files[0]; if (!f) return;
-    const rd = new FileReader();
-    rd.onload = () => { try { openImportModal(decodeMaybe(rd.result)); } catch (err) { toast('Archivo no válido'); } };
-    rd.readAsText(f);
-    e.target.value = '';
-  });
-  $('btn-import-confirm').addEventListener('click', () => { if (pendingImport) { applyImport(pendingImport); pendingImport = null; } $('import-modal').classList.remove('show'); });
-  $('btn-import-cancel').addEventListener('click', () => { pendingImport = null; $('import-modal').classList.remove('show'); });
-}
-function decodeMaybe(text) {
-  const s = text.trim();
-  if (s[0] === '{') return JSON.parse(s);          // archivo JSON
-  return decodeBundle(s.replace(/^.*#cfg=/, ''));  // por si pegan un enlace
 }
 
-/* Detecta enlace entrante #cfg= al abrir */
+/* Detecta enlace entrante #cfg= al abrir y lo aplica automáticamente */
 function checkIncomingConfig() {
   const m = location.hash.match(/[#&]cfg=([^&]+)/);
   if (!m) return;
   let b = null;
   try { b = decodeBundle(m[1]); } catch (e) { b = null; }
   try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
-  if (b) openImportModal(b);
+  if (b && !bundleIsEmpty(b)) applyImport(b);
 }
 
 /* =========================================================================
@@ -1390,6 +1575,7 @@ function bindControls() {
   $('thumb').addEventListener('click', () => { if (lastThumbURL) window.open(lastThumbURL, '_blank'); });
   $('viewfinder-tap').addEventListener('click', onViewfinderTap);
   $('compass').addEventListener('click', ensureHeading);
+  $('zoom-badge').addEventListener('click', resetZoom);
 }
 function tickClock() { setInterval(() => { if (isScreen('camera')) updateLiveOverlay(); }, 1000); }
 function registerSW() {
@@ -1405,6 +1591,8 @@ function init() {
   bindShare();
   bindInstall();
   bindWheelScroll();
+  bindSwipe();
+  bindPinch();
   renderWheel();
   updateLiveOverlay();
   updateCompass();

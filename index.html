@@ -33,6 +33,7 @@
 
   <div id="overlay"></div>
   <div id="aspect-frame"></div>
+  <button id="zoom-badge" aria-label="Zoom — tocar para volver a 1x">1.0×</button>
   <div id="focus-ring"></div>
   <div id="flash"></div>
 
@@ -40,19 +41,20 @@
   <div id="topbar">
     <span id="coords-readout">Buscando GPS…</span>
 
-    <!-- Brújula (franja superior, solo referencia, nunca en la foto) -->
+    <!-- Brújula: media rueda que gira (solo referencia, nunca en la foto) -->
     <div id="compass">
-      <div id="compass-strip">
-        <span class="cm cm-card c-n" data-deg="0">N</span>
-        <span class="cm cm-min" data-deg="45"></span>
-        <span class="cm cm-card c-e" data-deg="90">Or</span>
-        <span class="cm cm-min" data-deg="135"></span>
-        <span class="cm cm-card c-s" data-deg="180">S</span>
-        <span class="cm cm-min" data-deg="225"></span>
-        <span class="cm cm-card c-w" data-deg="270">Pte</span>
-        <span class="cm cm-min" data-deg="315"></span>
+      <div id="compass-arc">
+        <div class="compass-ring"></div>
+        <span class="cm c-n" data-deg="0">N</span>
+        <span class="cm" data-deg="45">NOr</span>
+        <span class="cm" data-deg="90">Or</span>
+        <span class="cm" data-deg="135">SOr</span>
+        <span class="cm" data-deg="180">S</span>
+        <span class="cm" data-deg="225">SPo</span>
+        <span class="cm" data-deg="270">Po</span>
+        <span class="cm" data-deg="315">NPo</span>
+        <div class="compass-center"></div>
       </div>
-      <div class="compass-center"></div>
       <span id="compass-label">tocar</span>
     </div>
 
@@ -195,6 +197,23 @@
       </select>
     </div>
 
+    <div class="field">
+      <label for="cfg-default-mode">Modo al abrir la app</label>
+      <select id="cfg-default-mode">
+        <option value="">Primero de la lista</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="cfg-text-size">Tamaño del texto en la foto</label>
+      <select id="cfg-text-size">
+        <option value="0.8">Pequeño</option>
+        <option value="1">Normal</option>
+        <option value="1.25">Grande</option>
+        <option value="1.5">Muy grande</option>
+      </select>
+    </div>
+
     <div class="row2">
       <div class="field">
         <label for="cfg-decimals">Decimales de coordenadas</label>
@@ -286,31 +305,23 @@
 
   <div class="sheet-body">
     <p class="note" style="margin-top:0;margin-bottom:16px">
-      Elige qué incluir y genera un enlace o archivo. Compártelo por WhatsApp; al abrirlo en GeoCam, la otra persona deberá <b>confirmar</b> la importación. Nada se sincroniza solo.
+      Marca qué compartir y genera un <b>enlace</b>. Quien lo abra en GeoCam quedará configurado <b>igual que tú automáticamente</b> (puede volver a fábrica si no le gusta). Nada se sincroniza solo.
     </p>
 
     <div class="switch-row">
-      <span>Incluir texto personalizado</span>
-      <label class="switch"><input type="checkbox" id="chk-share-text"><span class="slider"></span></label>
+      <span>Incluir todos los ajustes</span>
+      <label class="switch"><input type="checkbox" id="chk-share-settings"><span class="slider"></span></label>
     </div>
-    <div class="switch-row">
-      <span>Incluir color y sombreado</span>
-      <label class="switch"><input type="checkbox" id="chk-share-color"><span class="slider"></span></label>
-    </div>
+    <p class="note" style="margin-top:-4px">Texto, color, dirección, relación de aspecto, decimales, WhatsApp y demás opciones de Configuración.</p>
 
     <div class="section-title">Modos a incluir</div>
     <div id="share-modes-list"></div>
+    <p class="note" style="margin-top:8px">Los modos incluidos <b>reemplazan</b> los de la otra persona para que queden idénticos a los tuyos.</p>
 
     <button id="btn-share-send" class="save-big">Compartir enlace</button>
     <div style="display:flex;gap:10px;margin-top:12px">
-      <button id="btn-share-copy" class="editor-btn">Copiar enlace</button>
-      <button id="btn-share-file" class="editor-btn">Exportar archivo</button>
+      <button id="btn-share-copy" class="editor-btn" style="width:100%">Copiar enlace</button>
     </div>
-
-    <div class="section-title">Importar</div>
-    <input type="file" id="share-import-file" accept="application/json,.json" hidden>
-    <label class="editor-btn btn-load" for="share-import-file" style="width:100%">Importar desde archivo</label>
-    <p class="note">También puedes importar abriendo directamente un enlace de configuración en GeoCam.</p>
   </div>
 </section>
 
@@ -388,20 +399,6 @@
     </div>
   </div>
 </section>
-
-<!-- ============================ MODAL IMPORTAR ============================ -->
-<div id="import-modal">
-  <div class="modal-panel">
-    <h2>Importar configuración</h2>
-    <p class="modal-sub">Esto añadirá a este dispositivo:</p>
-    <pre id="import-summary"></pre>
-    <p class="note">Los modos se añaden a los que ya tienes (no se borra nada). Puedes reordenarlos o eliminarlos después.</p>
-    <div class="modal-actions">
-      <button id="btn-import-cancel" class="map-ghost">Cancelar</button>
-      <button id="btn-import-confirm" class="map-action">Importar</button>
-    </div>
-  </div>
-</div>
 
 <div id="toast"></div>
 

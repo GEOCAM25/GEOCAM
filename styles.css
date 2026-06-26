@@ -43,10 +43,10 @@ body[data-screen="share"] #screen-share{display:block}
   background:linear-gradient(to top,rgba(0,0,0,.55),transparent);pointer-events:none;z-index:6}
 
 /* ====== Overlay de telemetría (texto+coords+fecha) ====== */
-#overlay{position:absolute;left:0;right:0;bottom:calc(214px + var(--safe-b));
+#overlay{position:absolute;left:0;right:0;bottom:calc(170px + var(--safe-b));
   padding:0 18px;z-index:7;pointer-events:none;
   color:var(--accent);font-weight:600;line-height:1.34;
-  font-size:clamp(13px,3.6vw,17px);
+  font-size:calc(clamp(13px,3.6vw,17px) * var(--ov-scale, 1));
   text-shadow:0 1px 3px rgba(0,0,0,.85),0 0 1px rgba(0,0,0,.9);
   letter-spacing:.2px}
 #overlay div{white-space:pre-wrap}
@@ -139,7 +139,7 @@ body[data-screen="share"] #screen-share{display:block}
   transition:inset .08s ease}
 #shutter:active{transform:scale(.96)}
 #shutter:active::after{inset:9px}
-#macro-side{justify-self:end}
+#macro-side{justify-self:stretch}
 
 /* anillo de enfoque */
 #focus-ring{position:absolute;width:74px;height:74px;border:1.5px solid var(--accent);
@@ -280,25 +280,23 @@ body[data-screen="share"] #screen-share{display:block}
   #overlay{font-size:12px}
 }
 
-/* ====== Brújula: franja horizontal (solo pantalla) ====== */
-#compass{display:none;flex-direction:column;align-items:center;gap:2px;
-  position:relative;pointer-events:auto;user-select:none}
+/* ====== Brújula: media rueda que gira (solo pantalla) ====== */
+#compass{display:none;flex-direction:column;align-items:center;gap:1px;
+  position:absolute;left:50%;top:-4px;transform:translateX(-50%);
+  pointer-events:auto;user-select:none;z-index:1}
 #compass.show{display:flex}
-#compass-strip{position:relative;width:210px;height:20px;overflow:hidden;
-  border-radius:6px;background:rgba(0,0,0,.4);border:1px solid var(--stroke);
-  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
-  -webkit-mask-image:linear-gradient(90deg,transparent,#000 18%,#000 82%,transparent);
-  mask-image:linear-gradient(90deg,transparent,#000 18%,#000 82%,transparent)}
-#compass-strip .cm{position:absolute;top:50%;transform:translate(-50%,-50%);
-  font-size:11px;font-weight:800;color:#fff;letter-spacing:.4px;display:none}
-#compass-strip .cm.cm-min{width:1px;height:6px;background:var(--muted);
-  font-size:0;transform:translate(-50%,-50%)}
-#compass-strip .c-n{color:var(--accent)}
-.compass-center{position:absolute;top:-3px;left:50%;transform:translateX(-50%);
-  width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;
-  border-top:6px solid var(--accent);z-index:3}
+#compass-arc{position:relative;width:240px;height:72px;overflow:hidden;pointer-events:none}
+#compass-arc .cm{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;
+  font-size:11px;font-weight:800;color:#fff;letter-spacing:.3px;display:none;
+  text-shadow:0 1px 2px rgba(0,0,0,.9)}
+#compass-arc .cm.c-n{color:var(--accent)}
+.compass-ring{position:absolute;left:50%;top:10px;width:300px;height:300px;margin-left:-150px;
+  border-radius:50%;border:1px solid rgba(255,255,255,.16)}
+.compass-center{position:absolute;left:50%;top:0;transform:translateX(-50%);
+  width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;
+  border-top:7px solid var(--accent);z-index:3}
 #compass-label{font-size:11px;font-weight:800;color:#fff;
-  background:rgba(0,0,0,.4);padding:1px 9px;border-radius:999px;
+  background:rgba(0,0,0,.45);padding:1px 10px;border-radius:999px;
   backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);letter-spacing:.6px}
 
 /* ====== Banner instalar app ====== */
@@ -346,7 +344,7 @@ body[data-screen="share"] #screen-share{display:block}
 #aspect-frame.show{display:block}
 
 /* ====== Botón macro (al lado del obturador) ====== */
-#macro-side{display:flex;align-items:center;justify-content:center}
+#macro-side{display:flex;align-items:center;justify-content:flex-start;padding-left:10px}
 .side-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
   width:58px;height:58px;border-radius:50%;background:rgba(255,255,255,.1);
   border:1px solid var(--stroke);color:#fff;
@@ -363,3 +361,33 @@ body[data-screen="share"] #screen-share{display:block}
   border-radius:10px;color:var(--txt);font-size:13.5px;padding:9px 11px;font-family:inherit}
 .mode-wa-msg{resize:vertical;line-height:1.4}
 .mode-wa-target::placeholder,.mode-wa-msg::placeholder{color:var(--muted)}
+
+/* ====== Horizontal: el obturador se mantiene a un costado (como iPhone) ====== */
+@media (orientation: landscape) and (max-height: 600px) {
+  /* Controles inferiores -> columna pegada al borde derecho (alcanzable con el pulgar) */
+  #bottombar{left:auto;right:0;top:0;bottom:0;width:112px;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:0 calc(var(--safe-r)) 0 0}
+  #wheel-wrap,#reminder{display:none !important}
+  #shutter-row{grid-template-columns:1fr;grid-auto-rows:auto;gap:22px;padding:0;justify-items:center}
+  #thumb{justify-self:center}
+  #shutter{justify-self:center}
+  #macro-side{justify-self:center;padding-left:0}
+  /* Linterna/cámara -> al borde izquierdo */
+  #rail{right:auto;left:calc(12px + var(--safe-l))}
+  /* Coordenadas abajo-izquierda, sin chocar con los botones de la derecha */
+  #overlay{right:124px;bottom:calc(var(--safe-b) + 12px)}
+  /* Guía de aspecto un poco más centrada al área visible */
+  #aspect-frame{left:calc(50% - 56px)}
+}
+
+/* ====== Indicador de zoom (pinza) ====== */
+#zoom-badge{position:absolute;left:50%;bottom:calc(214px + var(--safe-b));
+  transform:translateX(-50%);z-index:9;display:none;
+  background:rgba(0,0,0,.55);color:var(--accent);border:1px solid var(--stroke);
+  font-weight:800;font-size:13px;letter-spacing:.4px;padding:5px 12px;border-radius:999px;
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+#zoom-badge.show{display:block}
+@media (orientation: landscape) and (max-height: 600px){
+  #zoom-badge{left:auto;right:124px;bottom:calc(var(--safe-b) + 50px);transform:none}
+}
