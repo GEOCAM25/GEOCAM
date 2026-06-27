@@ -35,7 +35,8 @@ const DEFAULT_CONFIG = {
   whatsappMode: 'each',    // each | complete (cada foto | todas al completar el modo)
   whatsappTarget: '',      // chat/grupo por defecto (referencia)
   useModes: false,         // false = cámara simple | true = sistema de modos
-  messageSpacing: 'normal' // none | normal | wide (espaciado en mensajes mejorados)
+  messageSpacing: 'normal',// none | normal | wide (espaciado en mensajes mejorados)
+  cameraQuality: 'auto'    // auto | high | medium | low (resolución de captura)
 };
 
 // Texto sembrado en versiones antiguas: si quedó guardado, se limpia (debe ir en blanco).
@@ -135,13 +136,44 @@ function stopStream() {
   stream = null; videoTrack = null; torchOn = false;
 }
 
+/* ---- Calidad de cámara adaptativa ---- */
+// Límite máximo por nivel. 'auto' detecta la gama del equipo.
+function qualityTarget(q) {
+  if (q === 'high') return { w: 4096, h: 2160, cap: 4096 };
+  if (q === 'medium') return { w: 1920, h: 1080, cap: 1920 };
+  if (q === 'low') return { w: 1280, h: 720, cap: 1280 };
+  // auto: estima según el hardware (núcleos y memoria) para no ahogar gama baja
+  const cores = navigator.hardwareConcurrency || 4;
+  const mem = navigator.deviceMemory || 4; // GB (aprox., no en todos)
+  if (cores <= 4 || mem <= 3) return { w: 1280, h: 720, cap: 1600 };      // gama baja
+  if (cores <= 6 || mem <= 5) return { w: 1920, h: 1080, cap: 2560 };     // gama media
+  return { w: 3840, h: 2160, cap: 4096 };                                  // gama alta
+}
+// Ajusta el track a la mejor resolución REAL del sensor sin pasar el tope elegido.
+async function applyBestResolution() {
+  if (!videoTrack) return;
+  try {
+    const q = config.cameraQuality;
+    const cap = qualityTarget(q).cap;
+    const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+    if (caps.width && caps.height && caps.width.max) {
+      const w = Math.min(caps.width.max, cap);
+      // mantiene proporción del sensor
+      const ratio = (caps.height.max && caps.width.max) ? caps.height.max / caps.width.max : 9 / 16;
+      const h = Math.round(w * ratio);
+      await videoTrack.applyConstraints({ width: { ideal: w }, height: { ideal: h } });
+    }
+  } catch (e) {}
+}
+
 async function startCamera(deviceId) {
   if (cameraStarting) return;
   cameraStarting = true;
   hideStartOverlay();
   stopStream();
-  // Pide la mayor resolución posible (el navegador elige la mejor del sensor)
-  const base = { width: { ideal: 4096 }, height: { ideal: 2160 } };
+  // Resolución según "Calidad de cámara": auto detecta el equipo; o la fija el usuario.
+  const target = qualityTarget(config.cameraQuality);
+  const base = { width: { ideal: target.w }, height: { ideal: target.h } };
   const constraints = {
     audio: false,
     video: deviceId ? Object.assign({ deviceId: { exact: deviceId } }, base)
@@ -158,13 +190,8 @@ async function startCamera(deviceId) {
   try { await video.play(); } catch (e) {}
   videoTrack = stream.getVideoTracks()[0];
   try { currentDeviceId = videoTrack.getSettings().deviceId || deviceId || null; } catch (e) {}
-  // Sube a la resolución máxima del equipo si está disponible
-  try {
-    const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
-    if (caps.width && caps.height && caps.width.max && caps.height.max) {
-      await videoTrack.applyConstraints({ width: { ideal: caps.width.max }, height: { ideal: caps.height.max } });
-    }
-  } catch (e) {}
+  // Ajusta a la mejor resolución real que el equipo soporta dentro del límite elegido
+  await applyBestResolution();
   detectTorch();
   await enumerateCams();
   // Autoenfoque continuo si el equipo lo permite (mejora el enfoque general)
@@ -373,7 +400,12 @@ function showFocusRing(x, y) {
 let brightTimer = null;
 const bCanvas = document.createElement('canvas'); bCanvas.width = 16; bCanvas.height = 16;
 const bCtx = bCanvas.getContext('2d', { willReadFrequently: true });
-function startBrightnessMonitor() { stopBrightnessMonitor(); brightTimer = setInterval(sampleBrightness, 1500); }
+function startBrightnessMonitor() {
+  stopBrightnessMonitor();
+  // Solo corre si hace falta (modo nocturno o color automático). Ahorra batería/CPU en gama baja.
+  if (!config.nightMode && config.colorMode !== 'auto') return;
+  brightTimer = setInterval(sampleBrightness, 2000);
+}
 function stopBrightnessMonitor() { if (brightTimer) clearInterval(brightTimer); brightTimer = null; }
 function avgLum(data) { let s = 0; for (let i = 0; i < data.length; i += 4) s += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]; return s / (data.length / 4); }
 function sampleBrightness() {
@@ -460,11 +492,17 @@ function updateTopStreet() {
    ========================================================================= */
 async function ensureHeading() {
   if (headingBound) return;
+  let lastDrawn = -999;
   const handler = (ev) => {
     let h = null;
     if (typeof ev.webkitCompassHeading === 'number') h = ev.webkitCompassHeading;          // iOS: norte real
     else if (ev.absolute && typeof ev.alpha === 'number') h = (360 - ev.alpha) % 360;       // Android absoluto
-    if (h != null && !isNaN(h)) { lastHeading = h; scheduleCompass(); }
+    if (h != null && !isNaN(h)) {
+      lastHeading = h;
+      // Solo redibuja si cambió ~1° o más (evita trabajo inútil en gama baja)
+      let d = Math.abs(h - lastDrawn); if (d > 180) d = 360 - d;
+      if (d >= 1) { lastDrawn = h; scheduleCompass(); }
+    }
   };
   if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
     try {
@@ -709,8 +747,7 @@ async function capturePhoto() {
     setThumb(blob);
     handleCapturedFile(file, blob, now);
     if (blurry) toast('IMAGEN MOVIDA', 1000);
-    afterCaptureAdvance();
-    checkBatchComplete();
+    if (!enhancedCaptureState) { afterCaptureAdvance(); checkBatchComplete(); }
   }, 'image/jpeg', 0.95);
 }
 
@@ -798,10 +835,11 @@ function buildExifGps(lat, lon, alt) {
 
 /* Decide qué hacer con cada foto: guardar, compartir, o acumular para el lote */
 function handleCapturedFile(file, blob, date) {
-  // Si estamos en un flujo de enhancedCapture, llamar al callback
-  if (window._enhancedCallback) {
-    window._enhancedCallback(file, blob, date);
-    window._enhancedCallback = null;
+  // Si estamos en un flujo de Mensajes Mejorados, desviar al callback
+  if (_enhancedCallback) {
+    const cb = _enhancedCallback;
+    _enhancedCallback = null;
+    cb(file, blob, date);
     return;
   }
   
@@ -932,6 +970,15 @@ function activeMode() { return modes.find(m => m.id === activeModeId) || modes[0
 
 function renderWheel() {
   const wheel = $('wheel');
+  const wrap = $('wheel-wrap') || wheel.parentElement;
+  // Cámara simple: sin modos. Oculta la rueda y el recordatorio.
+  if (!config.useModes) {
+    wheel.innerHTML = '';
+    if (wrap) wrap.style.display = 'none';
+    const rem = $('reminder'); if (rem) rem.classList.remove('show');
+    return;
+  }
+  if (wrap) wrap.style.display = '';
   wheel.innerHTML = '';
   if (!modes.length) {
     const ghost = document.createElement('button');
@@ -1060,6 +1107,7 @@ function renderSettings() {
   dm.value = (config.defaultMode && modes.some(m => m.id === config.defaultMode)) ? config.defaultMode : '';
   $('cfg-use-modes').checked = config.useModes;
   $('cfg-message-spacing').value = config.messageSpacing;
+  $('cfg-camera-quality').value = config.cameraQuality || 'auto';
   renderModesEditor();
 }
 
@@ -1067,7 +1115,7 @@ function bindSettings() {
   $('cfg-text').addEventListener('input', e => { config.customText = e.target.value; saveConfig(); updateLiveOverlay(); });
   $('cfg-orientation').addEventListener('change', e => { config.orientation = e.target.value; saveConfig(); applyOrientation(); });
   $('cfg-align').addEventListener('change', e => { config.align = e.target.value; saveConfig(); updateLiveOverlay(); });
-  $('cfg-color-mode').addEventListener('change', e => { config.colorMode = e.target.value; saveConfig(); liveAutoColor = null; updateLiveOverlay(); });
+  $('cfg-color-mode').addEventListener('change', e => { config.colorMode = e.target.value; saveConfig(); liveAutoColor = null; updateLiveOverlay(); startBrightnessMonitor(); });
   $('cfg-color').addEventListener('input', e => { config.textColor = e.target.value; saveConfig(); updateLiveOverlay(); });
   $('cfg-shadow').addEventListener('change', e => { config.shadow = e.target.checked; saveConfig(); updateLiveOverlay(); });
   $('cfg-altitude').addEventListener('change', e => { config.showAltitude = e.target.checked; saveConfig(); updateLiveOverlay(); });
@@ -1093,6 +1141,7 @@ function bindSettings() {
   });
   $('cfg-night').addEventListener('change', e => {
     config.nightMode = e.target.checked; saveConfig();
+    startBrightnessMonitor();
     if (config.nightMode && isIOS) { toast('El modo nocturno usa la linterna; no disponible en iPhone (web)'); return; }
     if (config.nightMode && !torchSupported) { toast('Este equipo no permite controlar la linterna'); return; }
     if (!config.nightMode && torchOn && torchAutoOn && videoTrack) {
@@ -1104,6 +1153,11 @@ function bindSettings() {
   $('cfg-whatsapp-target').addEventListener('input', e => { config.whatsappTarget = e.target.value; saveConfig(); });
   $('cfg-use-modes').addEventListener('change', e => { config.useModes = e.target.checked; saveConfig(); renderSettings(); });
   $('cfg-message-spacing').addEventListener('change', e => { config.messageSpacing = e.target.value; saveConfig(); });
+  $('cfg-camera-quality').addEventListener('change', e => {
+    config.cameraQuality = e.target.value; saveConfig();
+    toast('Aplicando calidad…');
+    startCamera(currentDeviceId); // reinicia la cámara con la nueva calidad
+  });
   $('btn-open-share').addEventListener('click', () => showScreen('share'));
   $('btn-add-mode').addEventListener('click', addMode);
   $('btn-reset').addEventListener('click', () => {
@@ -1199,70 +1253,77 @@ function renderModesEditor() {
     
     // Campos de Mensaje Mejorado
     const emTitle = createFieldGroup('Título del reporte', (v) => {
-      if (!m.enhancedMessages) m.enhancedMessages = { title: '', subtitle: '', photoCount: 1, steps: [], finalMessage: '' };
-      m.enhancedMessages.title = v;
+      emEnsure(m).title = v;
       saveModes();
     }, m.enhancedMessages?.title || '');
     
     const emSubtitle = createFieldGroup('Subtítulo (ej: TD N°1)', (v) => {
-      if (!m.enhancedMessages) m.enhancedMessages = { title: '', subtitle: '', photoCount: 1, steps: [], finalMessage: '' };
-      m.enhancedMessages.subtitle = v;
+      emEnsure(m).subtitle = v;
       saveModes();
     }, m.enhancedMessages?.subtitle || '');
     
-    const emPhotoCount = createFieldGroup('Cantidad de fotos', (v) => {
-      if (!m.enhancedMessages) m.enhancedMessages = { title: '', subtitle: '', photoCount: 1, steps: [], finalMessage: '' };
-      m.enhancedMessages.photoCount = Math.max(1, parseInt(v) || 1);
-      saveModes();
-    }, String(m.enhancedMessages?.photoCount || 1), 'number');
-    
-    const emStepsContainer = document.createElement('div');
-    emStepsContainer.className = 'mode-em-steps';
-    const emStepsTitle = document.createElement('div');
-    emStepsTitle.className = 'section-title';
-    emStepsTitle.textContent = 'Campos por imagen';
-    emStepsContainer.appendChild(emStepsTitle);
-    
-    const emStepsList = document.createElement('div');
-    emStepsList.className = 'mode-em-steps-list';
-    emStepsList.id = `em-steps-${i}`;
-    emStepsContainer.appendChild(emStepsList);
-    
-    const emAddStep = document.createElement('button');
-    emAddStep.className = 'mini-btn';
-    emAddStep.textContent = '+ Agregar campo';
-    emAddStep.addEventListener('click', () => {
-      if (!m.enhancedMessages) m.enhancedMessages = { title: '', subtitle: '', photoCount: 1, steps: [], finalMessage: '' };
-      m.enhancedMessages.steps.push({ type: 'input', label: '', placeholder: '', options: [], value: '' });
-      renderEnhancedSteps(i, m);
+    const emPhotosContainer = document.createElement('div');
+    emPhotosContainer.className = 'mode-em-steps';
+    const emPhotosTitle = document.createElement('div');
+    emPhotosTitle.className = 'section-title';
+    emPhotosTitle.textContent = 'Fotos y sus campos';
+    emPhotosContainer.appendChild(emPhotosTitle);
+
+    const emPhotosList = document.createElement('div');
+    emPhotosList.className = 'mode-em-steps-list';
+    emPhotosList.id = `em-photos-${i}`;
+    emPhotosContainer.appendChild(emPhotosList);
+
+    const emAddPhoto = document.createElement('button');
+    emAddPhoto.className = 'mini-btn add-photo-btn';
+    emAddPhoto.textContent = '＋ Agregar foto';
+    emAddPhoto.addEventListener('click', () => {
+      const em = emEnsure(m);
+      em.photos.push({ fields: [] });
+      renderEnhancedPhotos(i, m);
       saveModes();
     });
-    emStepsContainer.appendChild(emAddStep);
-    
+    emPhotosContainer.appendChild(emAddPhoto);
+
     const emFinalMessage = createFieldGroup('Mensaje final', (v) => {
-      if (!m.enhancedMessages) m.enhancedMessages = { title: '', subtitle: '', photoCount: 1, steps: [], finalMessage: '' };
-      m.enhancedMessages.finalMessage = v;
+      emEnsure(m).finalMessage = v;
       saveModes();
     }, m.enhancedMessages?.finalMessage || '');
-    
+
     emCheckbox.addEventListener('change', (e) => {
       if (e.target.checked) {
-        if (!m.enhancedMessages) m.enhancedMessages = { title: '', subtitle: '', photoCount: 1, steps: [], finalMessage: '' };
+        emEnsure(m);
         emForm.style.display = 'block';
+        renderEnhancedPhotos(i, m);
       } else {
         m.enhancedMessages = null;
         emForm.style.display = 'none';
       }
       saveModes();
     });
-    
-    emForm.append(emTitle, emSubtitle, emPhotoCount, emStepsContainer, emFinalMessage);
-    renderEnhancedSteps(i, m);
-    
+
+    emForm.append(emTitle, emSubtitle, emPhotosContainer, emFinalMessage);
+    if (m.enhancedMessages) renderEnhancedPhotos(i, m);
+
     emWrap.append(emToggle, emForm);
     card.append(head, hint, steps, waWrap, emWrap);
     list.appendChild(card);
   });
+}
+
+function emDefault() { return { title: '', subtitle: '', finalMessage: '', photos: [{ fields: [] }] }; }
+function emEnsure(m) {
+  if (!m.enhancedMessages) m.enhancedMessages = emDefault();
+  const em = m.enhancedMessages;
+  // Migración desde el modelo viejo (steps compartidos)
+  if (!Array.isArray(em.photos)) {
+    const n = Math.max(1, em.photoCount || 1);
+    em.photos = [];
+    for (let k = 0; k < n; k++) em.photos.push({ fields: (em.steps ? clone(em.steps) : []) });
+    delete em.steps; delete em.photoCount;
+  }
+  if (!em.photos.length) em.photos.push({ fields: [] });
+  return em;
 }
 
 function createFieldGroup(label, onChange, value, inputType = 'text') {
@@ -1279,72 +1340,126 @@ function createFieldGroup(label, onChange, value, inputType = 'text') {
   return div;
 }
 
-function renderEnhancedSteps(modeIdx, mode) {
+function renderEnhancedPhotos(modeIdx, mode) {
   if (!mode.enhancedMessages) return;
-  const container = document.querySelector(`#em-steps-${modeIdx}`);
+  const em = emEnsure(mode);
+  const container = document.querySelector(`#em-photos-${modeIdx}`);
   if (!container) return;
   container.innerHTML = '';
-  
-  (mode.enhancedMessages.steps || []).forEach((step, si) => {
-    const stepDiv = document.createElement('div');
-    stepDiv.className = 'em-step-card';
-    
-    const stepType = document.createElement('select');
-    stepType.value = step.type;
-    ['text', 'input', 'options'].forEach(t => {
-      const opt = document.createElement('option');
-      opt.value = t;
-      opt.textContent = t === 'text' ? 'Solo texto' : (t === 'input' ? 'Entrada de usuario' : 'Opciones (seleccionar)');
-      stepType.appendChild(opt);
-    });
-    stepType.addEventListener('change', (e) => {
-      step.type = e.target.value;
-      renderEnhancedSteps(modeIdx, mode);
+
+  em.photos.forEach((photo, pi) => {
+    const photoCard = document.createElement('div');
+    photoCard.className = 'em-photo-card';
+
+    const phHead = document.createElement('div');
+    phHead.className = 'em-photo-head';
+    const phTitle = document.createElement('span');
+    phTitle.textContent = `📷 Foto ${pi + 1}`;
+    const phDel = document.createElement('button');
+    phDel.className = 'mini-btn';
+    phDel.textContent = '✕ foto';
+    phDel.addEventListener('click', () => {
+      em.photos.splice(pi, 1);
+      if (!em.photos.length) em.photos.push({ fields: [] });
+      renderEnhancedPhotos(modeIdx, mode);
       saveModes();
     });
-    
-    const stepLabel = document.createElement('input');
-    stepLabel.type = 'text';
-    stepLabel.placeholder = 'Etiqueta (ej: ENROLLADO)';
-    stepLabel.value = step.label;
-    stepLabel.addEventListener('input', (e) => { step.label = e.target.value; saveModes(); });
-    
-    let stepExtra = null;
-    if (step.type === 'text') {
-      stepExtra = document.createElement('input');
-      stepExtra.type = 'text';
-      stepExtra.placeholder = 'Valor fijo (ej: imagen panorámica)';
-      stepExtra.value = step.value || '';
-      stepExtra.addEventListener('input', (e) => { step.value = e.target.value; saveModes(); });
-    } else if (step.type === 'input') {
-      stepExtra = document.createElement('input');
-      stepExtra.type = 'text';
-      stepExtra.placeholder = 'Placeholder (ej: escribe el número)';
-      stepExtra.value = step.placeholder || '';
-      stepExtra.addEventListener('input', (e) => { step.placeholder = e.target.value; saveModes(); });
-    } else if (step.type === 'options') {
-      stepExtra = document.createElement('textarea');
-      stepExtra.rows = 2;
-      stepExtra.placeholder = 'Opciones (una por línea): opción1\\nopción2\\nopción3';
-      stepExtra.value = (step.options || []).join('\n');
-      stepExtra.addEventListener('input', (e) => {
-        step.options = e.target.value.split('\n').map(s => s.trim()).filter(s => s);
+    phHead.append(phTitle, phDel);
+    photoCard.appendChild(phHead);
+
+    (photo.fields || []).forEach((field, fi) => {
+      photoCard.appendChild(buildFieldEditor(field, () => {
+        photo.fields.splice(fi, 1);
+        renderEnhancedPhotos(modeIdx, mode);
         saveModes();
-      });
-    }
-    
-    const stepDel = document.createElement('button');
-    stepDel.className = 'mini-btn';
-    stepDel.textContent = '✕';
-    stepDel.addEventListener('click', () => {
-      mode.enhancedMessages.steps.splice(si, 1);
-      renderEnhancedSteps(modeIdx, mode);
+      }, () => renderEnhancedPhotos(modeIdx, mode)));
+    });
+
+    const btnRow = document.createElement('div');
+    btnRow.className = 'em-photo-btns';
+    const addField = document.createElement('button');
+    addField.className = 'mini-btn';
+    addField.textContent = '+ Campo';
+    addField.addEventListener('click', () => {
+      photo.fields.push({ type: 'input', label: '', placeholder: '', options: [], value: '' });
+      renderEnhancedPhotos(modeIdx, mode);
       saveModes();
     });
-    
-    stepDiv.append(stepType, stepLabel, stepExtra, stepDel);
-    container.appendChild(stepDiv);
+    const addSep = document.createElement('button');
+    addSep.className = 'mini-btn';
+    addSep.textContent = '+ Separación';
+    addSep.addEventListener('click', () => {
+      photo.fields.push({ type: 'separator' });
+      renderEnhancedPhotos(modeIdx, mode);
+      saveModes();
+    });
+    btnRow.append(addField, addSep);
+    photoCard.appendChild(btnRow);
+
+    container.appendChild(photoCard);
   });
+}
+
+function buildFieldEditor(field, onDelete, onTypeChange) {
+  const stepDiv = document.createElement('div');
+  stepDiv.className = 'em-step-card';
+
+  if (field.type === 'separator') {
+    const sep = document.createElement('div');
+    sep.className = 'em-sep-row';
+    sep.textContent = '— Separación (línea en blanco) —';
+    const del = document.createElement('button');
+    del.className = 'mini-btn'; del.textContent = '✕';
+    del.addEventListener('click', onDelete);
+    stepDiv.append(sep, del);
+    return stepDiv;
+  }
+
+  const stepType = document.createElement('select');
+  [['text', 'Solo texto'], ['input', 'Entrada de usuario'], ['options', 'Opciones (elegir)']].forEach(([v, t]) => {
+    const opt = document.createElement('option'); opt.value = v; opt.textContent = t;
+    if (v === field.type) opt.selected = true;
+    stepType.appendChild(opt);
+  });
+  stepType.addEventListener('change', (e) => { field.type = e.target.value; saveModes(); onTypeChange(); });
+
+  const stepLabel = document.createElement('input');
+  stepLabel.type = 'text';
+  stepLabel.placeholder = 'Etiqueta (ej: ENROLLADO)';
+  stepLabel.value = field.label || '';
+  stepLabel.addEventListener('input', (e) => { field.label = e.target.value; saveModes(); });
+
+  let stepExtra = null;
+  if (field.type === 'text') {
+    stepExtra = document.createElement('input');
+    stepExtra.type = 'text';
+    stepExtra.placeholder = 'Valor fijo (ej: imagen panorámica)';
+    stepExtra.value = field.value || '';
+    stepExtra.addEventListener('input', (e) => { field.value = e.target.value; saveModes(); });
+  } else if (field.type === 'input') {
+    stepExtra = document.createElement('input');
+    stepExtra.type = 'text';
+    stepExtra.placeholder = 'Ayuda (ej: escribe el número)';
+    stepExtra.value = field.placeholder || '';
+    stepExtra.addEventListener('input', (e) => { field.placeholder = e.target.value; saveModes(); });
+  } else if (field.type === 'options') {
+    stepExtra = document.createElement('textarea');
+    stepExtra.rows = 3;
+    stepExtra.placeholder = 'Una opción por línea:\netapa 1\netapa 2\napagados';
+    stepExtra.value = (field.options || []).join('\n');
+    stepExtra.addEventListener('input', (e) => {
+      field.options = e.target.value.split('\n').map(s => s.trim()).filter(s => s);
+      saveModes();
+    });
+  }
+
+  const stepDel = document.createElement('button');
+  stepDel.className = 'mini-btn';
+  stepDel.textContent = '✕';
+  stepDel.addEventListener('click', onDelete);
+
+  stepDiv.append(stepType, stepLabel, stepExtra, stepDel);
+  return stepDiv;
 }
 
 function iconBtn(txt, title, fn) {
@@ -1501,8 +1616,8 @@ function applyImport(b) {
    MENSAJES MEJORADOS — Captura de datos antes de fotografiar
    ========================================================================= */
 function initEnhancedCapture(mode) {
-  if (!mode.enhancedMessages) { doSimpleCapture(); return; }
-  enhancedCaptureState = { mode, photoIndex: 0, data: [], total: mode.enhancedMessages.photoCount || 1 };
+  const em = emEnsure(mode);
+  enhancedCaptureState = { mode, em, photoIndex: 0, data: [], total: em.photos.length };
   enhancedPhotoBatch = [];
   advanceEnhancedCapture();
 }
@@ -1510,120 +1625,115 @@ function initEnhancedCapture(mode) {
 function advanceEnhancedCapture() {
   const st = enhancedCaptureState;
   if (st.photoIndex >= st.total) { finishEnhancedCapture(); return; }
-  
-  const photoLabel = `Foto ${st.photoIndex + 1}/${st.total}`;
-  const steps = st.mode.enhancedMessages.steps || [];
-  showEnhancedDataModal(photoLabel, steps, (responses) => {
-    st.data.push({ photo: st.photoIndex + 1, responses });
-    doSimpleCapture(true); // captura, y en el callback llama a advanceEnhancedCapture
-  });
+
+  const photo = st.em.photos[st.photoIndex];
+  const fields = (photo.fields || []).filter(f => f && f.type !== 'separator');
+  const askable = fields.filter(f => f.type === 'input' || f.type === 'options');
+
+  const proceed = (responses) => {
+    st.data.push({ photoIndex: st.photoIndex, responses });
+    doSimpleCapture(true);
+  };
+
+  // Si esta foto no pide datos, captura directo (sin modal)
+  if (askable.length === 0) { proceed({}); return; }
+
+  const photoLabel = `Foto ${st.photoIndex + 1} de ${st.total}`;
+  showEnhancedDataModal(photoLabel, photo.fields, proceed);
 }
 
-function showEnhancedDataModal(title, steps, onConfirm) {
+function showEnhancedDataModal(title, fields, onConfirm) {
   const modal = $('enhanced-modal');
   if (!modal) return;
-  
   $('enhanced-title').textContent = title;
   const form = $('enhanced-form');
   form.innerHTML = '';
-  
-  steps.forEach((step, idx) => {
-    if (!step) return;
+
+  (fields || []).forEach((field, idx) => {
+    if (!field || field.type === 'separator' || field.type === 'text') return; // solo se piden input/options
     const label = document.createElement('label');
     label.className = 'enhanced-field';
-    
     const labelText = document.createElement('span');
     labelText.className = 'field-label';
-    labelText.textContent = step.label || `Paso ${idx + 1}`;
+    labelText.textContent = field.label || `Dato ${idx + 1}`;
     label.appendChild(labelText);
-    
+
     let input;
-    if (step.type === 'text') {
-      // solo muestra el texto
-      input = document.createElement('div');
-      input.className = 'field-display';
-      input.textContent = step.value || '';
-      input.dataset.stepIdx = idx;
-    } else if (step.type === 'input') {
-      // campo de entrada obligatorio
+    if (field.type === 'input') {
       input = document.createElement('input');
       input.type = 'text';
-      input.placeholder = step.placeholder || 'Escribe aquí...';
-      input.dataset.stepIdx = idx;
+      input.placeholder = field.placeholder || 'Escribe aquí...';
       input.className = 'field-input';
-      input.required = true;
-    } else if (step.type === 'options') {
-      // selector de opciones
+    } else if (field.type === 'options') {
       input = document.createElement('select');
-      input.dataset.stepIdx = idx;
       input.className = 'field-select';
-      const opts = step.options || [];
-      opts.forEach(opt => {
-        const o = document.createElement('option');
-        o.value = opt;
-        o.textContent = opt;
+      (field.options || []).forEach(opt => {
+        const o = document.createElement('option'); o.value = opt; o.textContent = opt;
         input.appendChild(o);
       });
     }
-    
-    if (input) label.appendChild(input);
-    form.appendChild(label);
+    if (input) { input.dataset.fieldIdx = idx; label.appendChild(input); form.appendChild(label); }
   });
-  
+
   $('enhanced-confirm').onclick = () => {
-    const responses = [];
-    const inputs = form.querySelectorAll('[data-step-idx]');
+    const responses = {};
     let valid = true;
-    inputs.forEach(inp => {
-      const idx = +inp.dataset.stepIdx;
-      const step = steps[idx];
-      if (step.type === 'input' && !inp.value) { valid = false; toast('Completa todos los campos'); return; }
-      responses.push(inp.value || inp.textContent);
+    form.querySelectorAll('[data-field-idx]').forEach(inp => {
+      const idx = +inp.dataset.fieldIdx;
+      const field = fields[idx];
+      if (field.type === 'input' && !inp.value.trim()) { valid = false; }
+      responses[idx] = inp.value;
     });
-    if (!valid) return;
+    if (!valid) { toast('Completa los campos obligatorios'); return; }
     modal.classList.remove('show');
     onConfirm(responses);
   };
-  
+
   modal.classList.add('show');
 }
 
 function finishEnhancedCapture() {
-  if (enhancedPhotoBatch.length === 0) { toast('Sin fotos para compartir'); return; }
-  
+  if (enhancedPhotoBatch.length === 0) { enhancedCaptureState = null; return; }
   const caption = buildEnhancedCaption(enhancedCaptureState);
   shareEnhancedBatch(enhancedPhotoBatch, caption);
-  
   enhancedCaptureState = null;
   enhancedPhotoBatch = [];
 }
 
 function buildEnhancedCaption(state) {
-  const m = state.mode.enhancedMessages;
-  const sp = config.messageSpacing === 'wide' ? '\n\n' : (config.messageSpacing === 'none' ? '' : '\n');
-  let txt = '';
-  
-  if (m.title) txt += m.title;
-  if (m.subtitle) txt += (txt ? sp : '') + m.subtitle;
-  
-  state.data.forEach((photo, idx) => {
-    if (txt && idx === 0) txt += sp;
-    const photoSteps = m.steps || [];
-    photo.responses.forEach((resp, si) => {
-      const step = photoSteps[si];
-      if (!step) return;
+  const em = state.em;
+  const mode = config.messageSpacing; // none | normal | wide
+  const blocks = [];
+  const pushBlank = () => { if (mode !== 'none') blocks.push(''); };
+
+  if (em.title) blocks.push(em.title);
+  if (em.subtitle) { if (em.title) pushBlank(); blocks.push(em.subtitle); }
+
+  state.data.forEach((entry) => {
+    const photo = em.photos[entry.photoIndex];
+    (photo.fields || []).forEach((field, fi) => {
+      if (field.type === 'separator') { pushBlank(); return; }
       let line = '';
-      if (step.type === 'text') {
-        line = step.label + (step.value ? ': ' + step.value : '');
+      if (field.type === 'text') {
+        line = field.value ? (field.label ? `${field.label}: ${field.value}` : field.value) : (field.label || '');
       } else {
-        line = (step.label || `Foto ${photo.photo}`) + ': ' + resp;
+        const resp = entry.responses[fi] || '';
+        if (!resp) return;
+        line = field.label ? `${field.label}: ${resp}` : resp;
       }
-      txt += (txt && line ? sp : '') + line;
+      if (line !== '') blocks.push(line);
     });
   });
-  
-  if (m.finalMessage) txt += (txt ? sp : '') + m.finalMessage;
-  return txt;
+
+  if (em.finalMessage) blocks.push(em.finalMessage);
+
+  // Limpia líneas en blanco duplicadas y en los bordes
+  const cleaned = [];
+  blocks.forEach(b => { if (b === '' && (cleaned.length === 0 || cleaned[cleaned.length - 1] === '')) return; cleaned.push(b); });
+  while (cleaned.length && cleaned[cleaned.length - 1] === '') cleaned.pop();
+
+  if (mode === 'wide') return cleaned.filter(x => x !== '').join('\n\n');
+  return cleaned.join('\n');
 }
 
 async function shareEnhancedBatch(batch, caption) {
@@ -1644,13 +1754,13 @@ async function shareEnhancedBatch(batch, caption) {
 
 function doSimpleCapture(isEnhanced) {
   if (isEnhanced) {
-    window._enhancedCallback = (file, blob, date) => {
-      enhancedPhotoBatch.push({ blob, date, data: enhancedCaptureState.data[enhancedCaptureState.photoIndex] });
+    _enhancedCallback = (file, blob, date) => {
+      enhancedPhotoBatch.push({ blob, date });
       enhancedCaptureState.photoIndex++;
       advanceEnhancedCapture();
     };
+    capturePhoto();
   }
-  // El usuario toca el obturador (o puede ser automático en el futuro)
 }
 
 function bindShare() {
