@@ -1,5 +1,5 @@
 /* GeoCam Service Worker — cachea el "app shell" para arranque rápido y uso sin conexión. */
-const VERSION = 'geocam-v12';
+const VERSION = 'geocam-v13';
 const SHELL = [
   './',
   './index.html',

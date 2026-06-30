@@ -429,3 +429,17 @@ body[data-screen="share"] #screen-share{display:block}
 .em-step-card>input{flex:1 1 60%}
 .em-step-card>textarea{flex:1 1 100%}
 .em-step-card .mini-btn{flex:0 0 auto}
+
+/* ====== Modo VIDEO: obturador y grabación ====== */
+#shutter.video-mode{border-color:#ff4747}
+#shutter.video-mode::after{inset:auto;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:34px;height:34px;border-radius:50%;background:#ff4747;transition:width .18s ease,height .18s ease,border-radius .18s ease}
+#shutter.video-mode.recording::after{width:24px;height:24px;border-radius:6px}
+#shutter.video-mode:active::after{transform:translate(-50%,-50%) scale(.92)}
+.wheel-item.wheel-cam{color:var(--accent);font-weight:800}
+.wheel-item.wheel-vid{color:#ff6b6b}
+#rec-indicator{position:absolute;left:50%;top:calc(var(--safe-t) + 92px);transform:translateX(-50%);
+  z-index:13;display:none;background:rgba(0,0,0,.6);color:#ff5a5a;font-weight:800;font-size:13px;
+  letter-spacing:.5px;padding:5px 14px;border-radius:999px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+#rec-indicator.show{display:block;animation:recblink 1.4s ease-in-out infinite}
+@keyframes recblink{0%,100%{opacity:1}50%{opacity:.55}}

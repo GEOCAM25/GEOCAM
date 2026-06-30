@@ -36,7 +36,9 @@ const DEFAULT_CONFIG = {
   whatsappTarget: '',      // chat/grupo por defecto (referencia)
   useModes: false,         // false = cámara simple | true = sistema de modos
   messageSpacing: 'normal',// none | normal | wide (espaciado en mensajes mejorados)
-  cameraQuality: 'auto'    // auto | high | medium | low (resolución de captura)
+  cameraQuality: 'auto',   // auto | high | medium | low (resolución de captura)
+  photoEnhance: false,     // edición fotográfica automática (mejora imagen/video)
+  autoCamera: true         // ajustes de cámara automáticos (exposición/enfoque/balance)
 };
 
 // Texto sembrado en versiones antiguas: si quedó guardado, se limpia (debe ir en blanco).
@@ -99,7 +101,7 @@ let liveAutoColor = null;
 /* ---------------- Modos ---------------- */
 let activeModeId = (config.defaultMode && modes.some(m => m.id === config.defaultMode))
   ? config.defaultMode
-  : ((modes[0] && modes[0].id) || 'libre');
+  : '__cam__';
 let stepIndex = 0;
 let macroActive = false;          // botón macro: solo enfoque cercano (no captura)
 let modeBatch = [];               // fotos acumuladas del modo para compartir juntas
@@ -118,6 +120,7 @@ let pendingImport = null;
 function isScreen(name) { return body.dataset.screen === name; }
 function showScreen(name) {
   body.dataset.screen = name;
+  if (name !== 'camera' && recording) stopVideo(); // si sale de la cámara, detiene grabación
   if (name === 'camera') { ensureCamera(); startBrightnessMonitor(); }
   else { stopBrightnessMonitor(); }
   if (name === 'settings') renderSettings();
@@ -212,6 +215,8 @@ async function startCamera(deviceId) {
     }
   } catch (e) { nativeZoom = false; zoomMin = 1; zoomMax = 5; zoomStep = 0.1; }
   zoom = zoomMin; applyZoom(zoom);
+  // Ajustes automáticos de cámara: pide al equipo lo mejor para nitidez y luz
+  if (config.autoCamera) { try { await applyAutoCamera(); } catch (e) {} }
   // Linterna siempre encendida al abrir
   if (config.torchStart && torchSupported && !torchOn) {
     try { await videoTrack.applyConstraints({ advanced: [{ torch: true }] }); torchOn = true; $('btn-torch').classList.add('on'); } catch (e) {}
@@ -219,6 +224,19 @@ async function startCamera(deviceId) {
   cameraStarting = false;
   updateAspectFrame();
   updateLiveOverlay();
+}
+
+// Pide al navegador los modos automáticos disponibles (el control real es del sistema)
+async function applyAutoCamera() {
+  if (!videoTrack || !videoTrack.getCapabilities) return;
+  const caps = videoTrack.getCapabilities();
+  const adv = {};
+  if (caps.exposureMode && caps.exposureMode.includes('continuous')) adv.exposureMode = 'continuous';
+  if (caps.focusMode && caps.focusMode.includes('continuous')) adv.focusMode = 'continuous';
+  if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes('continuous')) adv.whiteBalanceMode = 'continuous';
+  // compensación de exposición a 0 (neutro) si el equipo lo permite
+  if (caps.exposureCompensation && typeof caps.exposureCompensation.max === 'number') adv.exposureCompensation = 0;
+  if (Object.keys(adv).length) { try { await videoTrack.applyConstraints({ advanced: [adv] }); } catch (e) {} }
 }
 
 /* ---- Zoom (pinza con dos dedos) ---- */
@@ -706,6 +724,189 @@ function updateAspectFrame() {
   f.style.height = Math.round(h) + 'px';
 }
 
+/* =========================================================================
+   EDICIÓN FOTOGRÁFICA — mejora automática tipo "editor profesional".
+   Trabaja sobre los píxeles del canvas: auto-niveles, exposición adaptativa,
+   recuperación de altas luces (sol/quemados), saturación, balance y nitidez.
+   No es una IA ni Night Sight, pero deja la foto notablemente mejor.
+   ========================================================================= */
+function enhanceCanvas(canvas) {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const W = canvas.width, H = canvas.height;
+  let img;
+  try { img = ctx.getImageData(0, 0, W, H); } catch (e) { return; }
+  const d = img.data, n = d.length;
+
+  // 1) Histograma de luminancia para auto-niveles
+  const hist = new Float32Array(256);
+  for (let i = 0; i < n; i += 4) {
+    const l = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) | 0;
+    hist[l]++;
+  }
+  const total = n / 4;
+  // percentiles 0.5% y 99.5% para recortes (negros/blancos) sin reventar
+  let acc = 0, lo = 0, hi = 255;
+  const loClip = total * 0.005, hiClip = total * 0.995;
+  for (let i = 0; i < 256; i++) { acc += hist[i]; if (acc >= loClip) { lo = i; break; } }
+  acc = 0;
+  for (let i = 0; i < 256; i++) { acc += hist[i]; if (acc >= hiClip) { hi = i; break; } }
+  if (hi - lo < 16) { lo = 0; hi = 255; } // imagen muy plana: no forzar
+
+  // brillo medio para exposición adaptativa
+  let sum = 0;
+  for (let i = 0; i < 256; i++) sum += hist[i] * i;
+  const mean = sum / total;                 // 0..255
+  // si está oscura sube; si está muy clara baja (suave)
+  const targetMean = 128;
+  let gamma = 1;
+  if (mean > 4 && mean < 250) gamma = Math.log(targetMean / 255) / Math.log(mean / 255);
+  gamma = Math.max(0.55, Math.min(1.7, gamma)); // límites seguros
+
+  const range = Math.max(1, hi - lo);
+  const sat = 1.18;        // saturación
+  const sharpen = 0.6;     // mezcla de nitidez (unsharp)
+
+  // LUT de niveles + gamma
+  const lut = new Uint8ClampedArray(256);
+  for (let i = 0; i < 256; i++) {
+    let v = (i - lo) / range;            // estira niveles
+    v = Math.max(0, Math.min(1, v));
+    v = Math.pow(v, gamma);              // exposición/gamma
+    // recuperación de altas luces: comprime lo cercano a 1 (anti-quemado)
+    if (v > 0.82) v = 0.82 + (v - 0.82) * 0.72;
+    lut[i] = v * 255;
+  }
+
+  // copia para nitidez (necesitamos original)
+  const src = new Uint8ClampedArray(d);
+
+  for (let i = 0; i < n; i += 4) {
+    let r = lut[d[i]], g = lut[d[i + 1]], b = lut[d[i + 2]];
+    // saturación alrededor del gris
+    const gray = r * 0.299 + g * 0.587 + b * 0.114;
+    r = gray + (r - gray) * sat;
+    g = gray + (g - gray) * sat;
+    b = gray + (b - gray) * sat;
+    d[i] = r; d[i + 1] = g; d[i + 2] = b;
+  }
+
+  // 2) Nitidez (unsharp mask ligero) — sólo si la imagen no es enorme (rendimiento)
+  if (W * H <= 8_000_000) {
+    applyUnsharp(d, src, W, H, sharpen, lut);
+  }
+
+  ctx.putImageData(img, 0, 0);
+}
+
+// Unsharp mask sencillo (realce de bordes) con kernel 3x3
+function applyUnsharp(d, src, W, H, amount, lut) {
+  const idx = (x, y) => (y * W + x) * 4;
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const c = idx(x, y);
+      for (let k = 0; k < 3; k++) {
+        const center = lut[src[c + k]];
+        // promedio de vecinos (con LUT para igualar el procesado base)
+        const avg = (
+          lut[src[idx(x - 1, y) + k]] + lut[src[idx(x + 1, y) + k]] +
+          lut[src[idx(x, y - 1) + k]] + lut[src[idx(x, y + 1) + k]]
+        ) / 4;
+        const hp = center - avg;            // alta frecuencia (borde)
+        d[c + k] = Math.max(0, Math.min(255, d[c + k] + hp * amount));
+      }
+    }
+  }
+}
+
+/* =========================================================================
+   VIDEO con estampa — graba con el overlay (coords/fecha/texto) quemado.
+   Compone cada frame en un canvas y lo graba con MediaRecorder.
+   ========================================================================= */
+let mediaRecorder = null, recording = false, recordRAF = 0, recordChunks = [], audioStream = null, recStartMs = 0, recTimerInt = null;
+const recCanvas = document.createElement('canvas');
+const recCtx = recCanvas.getContext('2d');
+
+function pickVideoMime() {
+  const opts = ['video/mp4;codecs=h264', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  for (const o of opts) { try { if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(o)) return o; } catch (e) {} }
+  return '';
+}
+
+async function startVideo() {
+  if (recording) return;
+  if (!videoTrack || !video.videoWidth) { toast('La cámara aún no está lista'); return; }
+  if (typeof MediaRecorder === 'undefined') { toast('Tu teléfono no permite grabar video en la app'); return; }
+
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const { sx, sy, sw, sh } = cropRectForAspect(vw, vh);
+  recCanvas.width = sw; recCanvas.height = sh;
+
+  const draw = () => {
+    if (!recording) return;
+    let srcX = sx, srcY = sy, srcW = sw, srcH = sh;
+    if (!nativeZoom && zoom > 1.01) { srcW = sw / zoom; srcH = sh / zoom; srcX = sx + (sw - srcW) / 2; srcY = sy + (sh - srcH) / 2; }
+    recCtx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, sw, sh);
+    drawOverlayBottom(recCtx, sw, sh, lastPos, new Date()); // estampa en vivo
+    recordRAF = requestAnimationFrame(draw);
+  };
+
+  let canvasStream;
+  try { canvasStream = recCanvas.captureStream(24); } catch (e) { toast('Tu teléfono no permite grabar en la app'); return; }
+  // Audio del micrófono (si se puede)
+  try { audioStream = await navigator.mediaDevices.getUserMedia({ audio: true }); audioStream.getAudioTracks().forEach(t => canvasStream.addTrack(t)); } catch (e) { audioStream = null; }
+
+  const mime = pickVideoMime();
+  try { mediaRecorder = new MediaRecorder(canvasStream, mime ? { mimeType: mime } : undefined); }
+  catch (e) { toast('No se pudo iniciar la grabación'); if (audioStream) audioStream.getTracks().forEach(t => t.stop()); return; }
+
+  recordChunks = [];
+  mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) recordChunks.push(e.data); };
+  mediaRecorder.onstop = () => finalizeVideo(mime);
+
+  recording = true; recStartMs = Date.now();
+  draw();
+  try { mediaRecorder.start(); } catch (e) { recording = false; toast('No se pudo grabar'); return; }
+  updateShutterMode();
+  showRecIndicator(true);
+}
+
+function stopVideo() {
+  if (!recording) return;
+  recording = false;
+  if (recordRAF) cancelAnimationFrame(recordRAF);
+  try { mediaRecorder && mediaRecorder.state !== 'inactive' && mediaRecorder.stop(); } catch (e) {}
+  if (audioStream) { audioStream.getTracks().forEach(t => t.stop()); audioStream = null; }
+  updateShutterMode();
+  showRecIndicator(false);
+}
+
+function finalizeVideo(mime) {
+  const type = (mime || 'video/webm').split(';')[0];
+  const ext = type.includes('mp4') ? 'mp4' : 'webm';
+  if (!recordChunks.length) { toast('Video vacío'); return; }
+  const blob = new Blob(recordChunks, { type });
+  recordChunks = [];
+  const fname = `${config.filePrefix || 'video'}_${tsName(new Date())}.${ext}`;
+  const file = new File([blob], fname, { type });
+  saveBlob(blob, file);
+  toast('Video guardado');
+}
+
+function showRecIndicator(on) {
+  const el = $('rec-indicator');
+  if (!el) return;
+  if (recTimerInt) { clearInterval(recTimerInt); recTimerInt = null; }
+  if (!on) { el.classList.remove('show'); return; }
+  el.classList.add('show');
+  const tick = () => {
+    const s = Math.floor((Date.now() - recStartMs) / 1000);
+    const mm = String(Math.floor(s / 60)).padStart(2, '0');
+    const ss = String(s % 60).padStart(2, '0');
+    el.textContent = `● REC ${mm}:${ss}`;
+  };
+  tick(); recTimerInt = setInterval(tick, 500);
+}
+
 async function capturePhoto() {
   if (!video.videoWidth) { toast('La cámara aún no está lista'); return; }
   const gate = captureAllowed();
@@ -729,6 +930,8 @@ async function capturePhoto() {
   }
   ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, sw, sh);
   const blurry = isBlurry(shotCanvas);
+  // Edición fotográfica automática (si está activada) — sobre la imagen, no el texto
+  if (config.photoEnhance) { try { enhanceCanvas(shotCanvas); } catch (e) {} }
   const now = new Date();
   drawOverlayBottom(ctx, sw, sh, lastPos, now);
   flashScreen();
@@ -966,58 +1169,61 @@ function shutterSound() {
 /* =========================================================================
    MODOS + RECORDATORIOS (rueda estilo iPhone)
    ========================================================================= */
-function activeMode() { return modes.find(m => m.id === activeModeId) || modes[0]; }
+function activeMode() {
+  if (activeModeId === '__cam__' || activeModeId === '__vid__') return null;
+  return modes.find(m => m.id === activeModeId) || null;
+}
 
+const CAM_ID = '__cam__', VID_ID = '__vid__';
 function renderWheel() {
   const wheel = $('wheel');
   const wrap = $('wheel-wrap') || wheel.parentElement;
-  // Cámara simple: sin modos. Oculta la rueda y el recordatorio.
-  if (!config.useModes) {
-    wheel.innerHTML = '';
-    if (wrap) wrap.style.display = 'none';
-    const rem = $('reminder'); if (rem) rem.classList.remove('show');
-    return;
-  }
   if (wrap) wrap.style.display = '';
   wheel.innerHTML = '';
-  if (!modes.length) {
-    const ghost = document.createElement('button');
-    ghost.className = 'wheel-item ghost active';
-    ghost.textContent = '＋ Crea tus modos en ⚙️';
-    ghost.addEventListener('click', () => showScreen('settings'));
-    wheel.appendChild(ghost);
-    updateReminder();
-    return;
-  }
-  modes.forEach(m => {
+  // Built-in: CÁMARA (principal) y VIDEO, luego los modos del usuario
+  const items = [{ id: CAM_ID, name: 'CÁMARA', cls: 'wheel-cam' }, { id: VID_ID, name: 'VIDEO', cls: 'wheel-vid' }];
+  modes.forEach(m => items.push({ id: m.id, name: m.name }));
+  items.forEach(it => {
     const el = document.createElement('button');
-    el.className = 'wheel-item';
-    el.dataset.id = m.id;
-    el.textContent = m.name;
-    el.addEventListener('click', () => selectMode(m.id, true));
+    el.className = 'wheel-item' + (it.cls ? ' ' + it.cls : '');
+    el.dataset.id = it.id;
+    el.textContent = it.name;
+    el.addEventListener('click', () => selectMode(it.id, true));
     wheel.appendChild(el);
   });
-  if (!modes.find(m => m.id === activeModeId)) activeModeId = modes[0].id;
+  const ids = items.map(i => i.id);
+  if (!ids.includes(activeModeId)) activeModeId = CAM_ID;
   updateWheelActive();
   updateReminder();
+  updateShutterMode();
   requestAnimationFrame(() => scrollWheelTo(activeModeId, false));
 }
 function selectMode(id, doScroll) {
+  if (recording && id !== VID_ID) stopVideo();   // si grababa y cambia de modo, detiene
   if (id === activeModeId) { stepIndex = 0; } else { activeModeId = id; stepIndex = 0; }
   modeBatch = [];
   updateWheelActive();
   updateReminder();
+  updateShutterMode();
   if (doScroll) scrollWheelTo(id, true);
 }
 function updateWheelActive() {
   [...$('wheel').children].forEach(c => c.classList.toggle('active', c.dataset.id === activeModeId));
 }
+function updateShutterMode() {
+  const sh = $('shutter');
+  if (!sh) return;
+  sh.classList.toggle('video-mode', activeModeId === VID_ID);
+  sh.classList.toggle('recording', recording);
+}
 function stepMode(dir) {
-  if (!modes.length) return;
-  let i = modes.findIndex(m => m.id === activeModeId);
+  const wheel = $('wheel');
+  const ids = [...wheel.children].map(c => c.dataset.id);
+  if (!ids.length) return;
+  let i = ids.indexOf(activeModeId);
   if (i < 0) i = 0;
-  i = (i + dir + modes.length) % modes.length;
-  selectMode(modes[i].id, true);
+  i = (i + dir + ids.length) % ids.length;
+  selectMode(ids[i], true);
 }
 function scrollWheelTo(id, smooth) {
   const wheel = $('wheel');
@@ -1098,14 +1304,15 @@ function renderSettings() {
   $('cfg-whatsapp-mode').value = config.whatsappMode;
   $('cfg-whatsapp-target').value = config.whatsappTarget || '';
   const dm = $('cfg-default-mode');
-  dm.innerHTML = '<option value="">Primero de la lista</option>';
+  dm.innerHTML = '<option value="">Cámara (principal)</option>';
   modes.forEach(m => {
     const o = document.createElement('option');
     o.value = m.id; o.textContent = m.name;
     dm.appendChild(o);
   });
   dm.value = (config.defaultMode && modes.some(m => m.id === config.defaultMode)) ? config.defaultMode : '';
-  $('cfg-use-modes').checked = config.useModes;
+  $('cfg-photo-enhance').checked = config.photoEnhance;
+  $('cfg-auto-camera').checked = config.autoCamera;
   $('cfg-message-spacing').value = config.messageSpacing;
   $('cfg-camera-quality').value = config.cameraQuality || 'auto';
   renderModesEditor();
@@ -1151,7 +1358,8 @@ function bindSettings() {
   $('cfg-whatsapp').addEventListener('change', e => { config.whatsapp = e.target.checked; saveConfig(); });
   $('cfg-whatsapp-mode').addEventListener('change', e => { config.whatsappMode = e.target.value; saveConfig(); });
   $('cfg-whatsapp-target').addEventListener('input', e => { config.whatsappTarget = e.target.value; saveConfig(); });
-  $('cfg-use-modes').addEventListener('change', e => { config.useModes = e.target.checked; saveConfig(); renderSettings(); });
+  $('cfg-photo-enhance').addEventListener('change', e => { config.photoEnhance = e.target.checked; saveConfig(); });
+  $('cfg-auto-camera').addEventListener('change', e => { config.autoCamera = e.target.checked; saveConfig(); if (config.autoCamera) applyAutoCamera(); });
   $('cfg-message-spacing').addEventListener('change', e => { config.messageSpacing = e.target.value; saveConfig(); });
   $('cfg-camera-quality').addEventListener('change', e => {
     config.cameraQuality = e.target.value; saveConfig();
@@ -2014,15 +2222,10 @@ function hideStartOverlay() { $('start-overlay').classList.remove('show'); }
    INICIO
    ========================================================================= */
 function handleCapture() {
-  // Si useModes está ON y el modo actual tiene enhancedMessages, iniciar flujo enhancedCapture
-  if (config.useModes) {
-    const mode = activeMode();
-    if (mode && mode.enhancedMessages) {
-      initEnhancedCapture(mode);
-      return;
-    }
-  }
-  // Si no, captura normal
+  if (activeModeId === VID_ID) { recording ? stopVideo() : startVideo(); return; }
+  if (activeModeId === CAM_ID) { capturePhoto(); return; }
+  const mode = activeMode();
+  if (mode && mode.enhancedMessages) { initEnhancedCapture(mode); return; }
   capturePhoto();
 }
 

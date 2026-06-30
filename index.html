@@ -34,6 +34,7 @@
   <div id="overlay"></div>
   <div id="aspect-frame"></div>
   <button id="zoom-badge" aria-label="Zoom — tocar para volver a 1x">1.0×</button>
+  <div id="rec-indicator">● REC 00:00</div>
   <div id="focus-ring"></div>
   <div id="flash"></div>
 
@@ -200,7 +201,7 @@
     <div class="field">
       <label for="cfg-default-mode">Modo al abrir la app</label>
       <select id="cfg-default-mode">
-        <option value="">Primero de la lista</option>
+        <option value="">Cámara (principal)</option>
       </select>
     </div>
 
@@ -215,10 +216,16 @@
     </div>
 
     <div class="switch-row">
-      <span>Usar sistema de modos</span>
-      <label class="switch"><input type="checkbox" id="cfg-use-modes"><span class="slider"></span></label>
+      <span>Edición fotográfica automática</span>
+      <label class="switch"><input type="checkbox" id="cfg-photo-enhance"><span class="slider"></span></label>
     </div>
-    <p class="note" style="margin-top:-4px">Activar para usar modos con mensajes mejorados. Desactivar = cámara normal simple.</p>
+    <p class="note" style="margin-top:-4px">Mejora cada foto automáticamente: corrige contraste, brillo, color, recupera zonas quemadas por el sol, realza nitidez y aclara sombras. Ideal para que las fotos de terreno queden nítidas y parejas. (En video no se aplica, sería muy pesado.)</p>
+
+    <div class="switch-row">
+      <span>Ajustes de cámara automáticos</span>
+      <label class="switch"><input type="checkbox" id="cfg-auto-camera"><span class="slider"></span></label>
+    </div>
+    <p class="note" style="margin-top:-4px">Pide al equipo exposición, enfoque y balance de blancos automáticos para la mejor imagen con poca o mucha luz.</p>
 
     <div class="field">
       <label for="cfg-message-spacing">Espaciado en mensajes mejorados</label>
