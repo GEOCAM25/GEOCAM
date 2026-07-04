@@ -79,6 +79,8 @@ const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
 function isStandalone() {
   return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
 }
+// Equipo de gama baja (para aligerar efectos): pocos núcleos o poca memoria.
+const LOWEND = ((navigator.hardwareConcurrency || 4) <= 4) || ((navigator.deviceMemory || 4) <= 3);
 
 /* ---------------- Atajos DOM ---------------- */
 const $ = (id) => document.getElementById(id);
@@ -121,7 +123,10 @@ function isScreen(name) { return body.dataset.screen === name; }
 function showScreen(name) {
   body.dataset.screen = name;
   if (name !== 'camera' && recording) stopVideo(); // si sale de la cámara, detiene grabación
-  if (name === 'camera') { ensureCamera(); startBrightnessMonitor(); }
+  if (name === 'camera') {
+    ensureCamera(); startBrightnessMonitor();
+    if (!isIOS) ensureHeading(); // Android no requiere permiso: arranca la brújula sola
+  }
   else { stopBrightnessMonitor(); }
   if (name === 'settings') renderSettings();
   if (name === 'share') renderShareScreen();
@@ -205,6 +210,7 @@ async function startCamera(deviceId) {
     }
   } catch (e) {}
   macroActive = false; $('btn-macro').classList.remove('active');
+  minimacroActive = false; $('btn-minimacro').classList.remove('active');
   // Zoom: usa el del hardware si existe (Android); si no, zoom digital (iPhone)
   try {
     const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
@@ -318,41 +324,59 @@ async function toggleTorch() {
   } catch (e) { torchOn = !torchOn; toast('No se pudo cambiar la linterna'); }
 }
 
-/* ---- Macro (toggle de enfoque cercano; NO captura) ---- */
+/* ---- Macro / Mini macro (enfoque manual cercano; NO captura) ----
+   Macro = lo más cerca posible. Mini macro = ~30 cm. Se excluyen entre sí. */
+let minimacroActive = false;
+function focusCaps() { try { return videoTrack && videoTrack.getCapabilities ? videoTrack.getCapabilities() : {}; } catch (e) { return {}; } }
+async function setManualFocus(frac) {
+  // frac 0 = lo más cerca (min). 1 = lejos (max). Devuelve true si se aplicó.
+  const caps = focusCaps();
+  if (!caps.focusDistance || typeof caps.focusDistance.min !== 'number') return false;
+  const fd = caps.focusDistance;
+  const val = fd.min + (fd.max - fd.min) * frac;
+  try {
+    await videoTrack.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: val }] });
+    return true;
+  } catch (e) { return false; }
+}
 async function toggleMacro() {
   if (!videoTrack) { toast('La cámara aún no está lista'); return; }
+  // si estaba mini macro, apágalo
+  if (minimacroActive) { minimacroActive = false; $('btn-minimacro').classList.remove('active'); }
   macroActive = !macroActive;
   const btn = $('btn-macro');
   if (macroActive) {
-    let ok = false;
-    try {
-      const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
-      if (caps.focusDistance) {
-        await videoTrack.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: caps.focusDistance.min }] });
-        ok = true;
-      }
-    } catch (e) {}
-    if (!ok) {
-      const uw = lensList.find(d => /ultra|gran|wide/i.test(d.label || ''));
-      if (uw && uw.deviceId !== currentDeviceId) {
-        await startCamera(uw.deviceId);
-        lensIndex = lensList.findIndex(d => d.deviceId === uw.deviceId);
-        macroActive = true; // startCamera lo resetea; lo reactivamos
-        ok = true;
-      }
-    }
+    const ok = await setManualFocus(0); // lo más cerca posible
     btn.classList.add('active');
-    toast(ok ? 'Macro activado · enfoca de cerca y toca la foto'
-             : (isIOS ? 'Macro limitado en iPhone (web). Acerca el equipo' : 'Acerca el equipo al objeto'));
+    toast(ok ? 'Macro: acerca mucho el equipo y toca la foto'
+             : (isIOS ? 'Macro no disponible en iPhone (web)' : 'Este equipo no permite enfoque manual'));
+    if (!ok) { macroActive = false; btn.classList.remove('active'); }
   } else {
     await restoreFocus();
     btn.classList.remove('active');
     toast('Macro desactivado');
   }
 }
+async function toggleMinimacro() {
+  if (!videoTrack) { toast('La cámara aún no está lista'); return; }
+  if (macroActive) { macroActive = false; $('btn-macro').classList.remove('active'); }
+  minimacroActive = !minimacroActive;
+  const btn = $('btn-minimacro');
+  if (minimacroActive) {
+    const ok = await setManualFocus(0.12); // ~30 cm aprox (ajustable según equipo)
+    btn.classList.add('active');
+    toast(ok ? 'Mini macro: enfoca a ~30 cm y toca la foto'
+             : (isIOS ? 'Enfoque cercano limitado en iPhone (web)' : 'Este equipo no permite enfoque manual'));
+    if (!ok) { minimacroActive = false; btn.classList.remove('active'); }
+  } else {
+    await restoreFocus();
+    btn.classList.remove('active');
+    toast('Mini macro desactivado');
+  }
+}
 async function restoreFocus() {
   try {
-    const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+    const caps = focusCaps();
     if (caps.focusMode && caps.focusMode.includes('continuous')) {
       await videoTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
     }
@@ -360,6 +384,7 @@ async function restoreFocus() {
 }
 function macroOffAfterCapture() {
   if (macroActive) { macroActive = false; $('btn-macro').classList.remove('active'); restoreFocus(); }
+  if (minimacroActive) { minimacroActive = false; $('btn-minimacro').classList.remove('active'); restoreFocus(); }
 }
 
 /* ---- Deslizar izquierda/derecha para cambiar de modo (estilo iPhone) ---- */
@@ -422,7 +447,7 @@ function startBrightnessMonitor() {
   stopBrightnessMonitor();
   // Solo corre si hace falta (modo nocturno o color automático). Ahorra batería/CPU en gama baja.
   if (!config.nightMode && config.colorMode !== 'auto') return;
-  brightTimer = setInterval(sampleBrightness, 2000);
+  brightTimer = setInterval(sampleBrightness, LOWEND ? 3500 : 2000);
 }
 function stopBrightnessMonitor() { if (brightTimer) clearInterval(brightTimer); brightTimer = null; }
 function avgLum(data) { let s = 0; for (let i = 0; i < data.length; i += 4) s += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]; return s / (data.length / 4); }
@@ -466,6 +491,9 @@ function startGeo() {
     { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 }
   );
 }
+function stopGeo() {
+  if (geoWatch != null) { try { navigator.geolocation.clearWatch(geoWatch); } catch (e) {} geoWatch = null; }
+}
 
 /* Distancia aproximada en metros */
 function haversine(la1, lo1, la2, lo2) {
@@ -478,7 +506,7 @@ function haversine(la1, lo1, la2, lo2) {
 /* Nombre de calle (arriba, solo visual) + dirección para la foto.
    Usa OpenStreetMap (Nominatim). Si falla o no hay conexión, se omite. */
 async function maybeReverseGeocode() {
-  if (!lastPos) return;
+  if (!lastPos || document.hidden) return; // en segundo plano no se consulta (ahorra datos/batería)
   const lat = lastPos.coords.latitude, lon = lastPos.coords.longitude;
   const now = Date.now();
   if (lastGeoLatLon && haversine(lat, lon, lastGeoLatLon[0], lastGeoLatLon[1]) < 25 && now - lastGeoFetch < 30000) return;
@@ -510,19 +538,31 @@ function updateTopStreet() {
    ========================================================================= */
 async function ensureHeading() {
   if (headingBound) return;
-  let lastDrawn = -999;
+  let lastDrawn = -999, sawAbsolute = false, relOK = false;
   const handler = (ev) => {
     let h = null;
-    if (typeof ev.webkitCompassHeading === 'number') h = ev.webkitCompassHeading;          // iOS: norte real
-    else if (ev.absolute && typeof ev.alpha === 'number') h = (360 - ev.alpha) % 360;       // Android absoluto
+    const isAbs = (typeof ev.webkitCompassHeading === 'number') || ev.absolute === true || ev.type === 'deviceorientationabsolute';
+    if (typeof ev.webkitCompassHeading === 'number') {
+      h = ev.webkitCompassHeading;                          // iOS: norte real
+    } else if (typeof ev.alpha === 'number') {
+      if (isAbs) sawAbsolute = true;
+      else if (sawAbsolute || !relOK) return;               // ignora el relativo si hay absoluto (o aún no toca)
+      h = (360 - ev.alpha) % 360;
+      // Compensa la rotación de pantalla para que el norte no se corra en horizontal
+      const sa = (screen.orientation && typeof screen.orientation.angle === 'number')
+                 ? screen.orientation.angle : (typeof window.orientation === 'number' ? window.orientation : 0);
+      h = (h + sa) % 360;
+    }
     if (h != null && !isNaN(h)) {
+      h = ((h % 360) + 360) % 360;
       lastHeading = h;
-      // Solo redibuja si cambió ~1° o más (evita trabajo inútil en gama baja)
+      headingState = 'on';
       let d = Math.abs(h - lastDrawn); if (d > 180) d = 360 - d;
-      if (d >= 1) { lastDrawn = h; scheduleCompass(); }
+      if (d >= (LOWEND ? 2 : 1)) { lastDrawn = h; scheduleCompass(); }
     }
   };
   if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    // iOS: requiere permiso desde un gesto del usuario
     try {
       const r = await DeviceOrientationEvent.requestPermission();
       if (r !== 'granted') { headingState = 'denied'; updateCompass(); return; }
@@ -530,7 +570,13 @@ async function ensureHeading() {
   }
   window.addEventListener('deviceorientationabsolute', handler, true);
   window.addEventListener('deviceorientation', handler, true);
-  headingBound = true; headingState = 'on'; updateCompass();
+  headingBound = true; updateCompass();
+  // Si en 2.5 s no llegó sensor absoluto, acepta el relativo (mejor eso que nada).
+  setTimeout(() => { relOK = true; }, 2500);
+  // Si en 5 s no llegó NINGÚN dato, este equipo no entrega brújula al navegador.
+  setTimeout(() => {
+    if (lastHeading == null && headingState !== 'denied') { headingState = 'unavailable'; updateCompass(); }
+  }, 5000);
 }
 const CARD8 = ['Norte', 'Nororiente', 'Oriente', 'Suroriente', 'Sur', 'Surponiente', 'Poniente', 'Norponiente'];
 function cardinalES(h) {
@@ -550,7 +596,9 @@ function updateCompass() {
   const label = $('compass-label');
   const marks = arc ? arc.querySelectorAll('.cm') : [];
   if (lastHeading == null) {
-    label.textContent = headingState === 'denied' ? 'sin permiso' : 'tocar';
+    label.textContent = headingState === 'denied' ? 'sin permiso'
+                      : headingState === 'unavailable' ? 'sin brújula'
+                      : 'tocar';
     marks.forEach(el => { el.style.display = 'none'; });
     return;
   }
@@ -649,6 +697,48 @@ function overlayAnchorX(w) {
        : config.align === 'right' ? Math.round(w * 0.972)
        : Math.round(w / 2);
 }
+/* Orientación FÍSICA del teléfono (0/90/180/270) leída del acelerómetro.
+   Funciona aunque la rotación de pantalla esté bloqueada (caso típico del texto torcido). */
+let physAngle = null; // null = aún desconocida
+function bindPhysAngle() {
+  // Android: devicemotion no pide permiso. iOS: se salta (Safari rota solo y motion pide permiso aparte).
+  if (isIOS || typeof DeviceMotionEvent === 'undefined') return;
+  window.addEventListener('devicemotion', (e) => {
+    const g = e.accelerationIncludingGravity;
+    if (!g || g.x == null || g.y == null) return;
+    const ax = g.x, ay = g.y;
+    // Histéresis: solo cambia cuando el eje domina claramente (evita saltos)
+    if (Math.abs(ax) > 6 && Math.abs(ax) > Math.abs(ay)) physAngle = ax > 0 ? 90 : 270; // horizontal
+    else if (Math.abs(ay) > 6) physAngle = ay > 0 ? 0 : 180;                             // vertical
+  }, true);
+}
+/* ¿Cuántos grados hay que girar la captura para que quede derecha?
+   effA = cómo vienen los píxeles (si el stream no siguió a la pantalla, vienen "en natural"). */
+function captureRotation(sw, sh) {
+  const screenA = deviceAngle();
+  const streamLandscape = sw > sh;
+  const screenLandscape = (screenA === 90 || screenA === 270);
+  const effA = (streamLandscape === screenLandscape) ? screenA : 0;
+  const phys = (physAngle == null) ? screenA : physAngle;
+  return (effA - phys + 360) % 360;
+}
+
+/* Rota un canvas en grados (90/180/270) y devuelve uno nuevo ya orientado */
+function rotateCanvasDeg(src, deg) {
+  deg = ((deg % 360) + 360) % 360;
+  if (!deg) return src;
+  const out = document.createElement('canvas');
+  const sw = src.width, sh = src.height;
+  if (deg === 90 || deg === 270) { out.width = sh; out.height = sw; }
+  else { out.width = sw; out.height = sh; }
+  const cx = out.getContext('2d');
+  if (deg === 90) { cx.translate(out.width, 0); cx.rotate(Math.PI / 2); }
+  else if (deg === 180) { cx.translate(out.width, out.height); cx.rotate(Math.PI); }
+  else if (deg === 270) { cx.translate(0, out.height); cx.rotate(-Math.PI / 2); }
+  cx.drawImage(src, 0, 0);
+  return out;
+}
+
 function drawOverlayBottom(ctx, w, h, pos, date) {
   const lines = buildLines(pos, date);
   const scale = config.textScale || 1;
@@ -790,8 +880,8 @@ function enhanceCanvas(canvas) {
     d[i] = r; d[i + 1] = g; d[i + 2] = b;
   }
 
-  // 2) Nitidez (unsharp mask ligero) — sólo si la imagen no es enorme (rendimiento)
-  if (W * H <= 8_000_000) {
+  // 2) Nitidez (unsharp mask ligero) — se omite en gama baja o imágenes enormes (rendimiento)
+  if (!LOWEND && W * H <= 8000000) {
     applyUnsharp(d, src, W, H, sharpen, lut);
   }
 
@@ -839,19 +929,22 @@ async function startVideo() {
 
   const vw = video.videoWidth, vh = video.videoHeight;
   const { sx, sy, sw, sh } = cropRectForAspect(vw, vh);
-  recCanvas.width = sw; recCanvas.height = sh;
+  // En gama baja se graba máx. a 1280 de ancho: mucho más fluido y pesa menos.
+  let rw = sw, rh = sh;
+  if (LOWEND && sw > 1280) { rh = Math.round(sh * 1280 / sw); rw = 1280; }
+  recCanvas.width = rw; recCanvas.height = rh;
 
+  const fps = LOWEND ? 15 : 24;
   const draw = () => {
     if (!recording) return;
     let srcX = sx, srcY = sy, srcW = sw, srcH = sh;
     if (!nativeZoom && zoom > 1.01) { srcW = sw / zoom; srcH = sh / zoom; srcX = sx + (sw - srcW) / 2; srcY = sy + (sh - srcH) / 2; }
-    recCtx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, sw, sh);
-    drawOverlayBottom(recCtx, sw, sh, lastPos, new Date()); // estampa en vivo
-    recordRAF = requestAnimationFrame(draw);
+    recCtx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, rw, rh);
+    drawOverlayBottom(recCtx, rw, rh, lastPos, new Date()); // estampa en vivo
   };
 
   let canvasStream;
-  try { canvasStream = recCanvas.captureStream(24); } catch (e) { toast('Tu teléfono no permite grabar en la app'); return; }
+  try { canvasStream = recCanvas.captureStream(fps); } catch (e) { toast('Tu teléfono no permite grabar en la app'); return; }
   // Audio del micrófono (si se puede)
   try { audioStream = await navigator.mediaDevices.getUserMedia({ audio: true }); audioStream.getAudioTracks().forEach(t => canvasStream.addTrack(t)); } catch (e) { audioStream = null; }
 
@@ -865,7 +958,9 @@ async function startVideo() {
 
   recording = true; recStartMs = Date.now();
   draw();
-  try { mediaRecorder.start(); } catch (e) { recording = false; toast('No se pudo grabar'); return; }
+  // Dibuja SOLO a la tasa del video (no a 60 Hz): menos CPU, menos calor, más batería.
+  recordRAF = setInterval(draw, Math.round(1000 / fps));
+  try { mediaRecorder.start(); } catch (e) { recording = false; clearInterval(recordRAF); toast('No se pudo grabar'); return; }
   updateShutterMode();
   showRecIndicator(true);
 }
@@ -873,7 +968,7 @@ async function startVideo() {
 function stopVideo() {
   if (!recording) return;
   recording = false;
-  if (recordRAF) cancelAnimationFrame(recordRAF);
+  if (recordRAF) { clearInterval(recordRAF); recordRAF = 0; }
   try { mediaRecorder && mediaRecorder.state !== 'inactive' && mediaRecorder.stop(); } catch (e) {}
   if (audioStream) { audioStream.getTracks().forEach(t => t.stop()); audioStream = null; }
   updateShutterMode();
@@ -930,17 +1025,23 @@ async function capturePhoto() {
   }
   ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, sw, sh);
   const blurry = isBlurry(shotCanvas);
+
+  // Corrige la orientación: si tomaste horizontal, el resultado queda derecho y el texto abajo.
+  const rot = captureRotation(sw, sh);
+  let outCanvas = rot ? rotateCanvasDeg(shotCanvas, rot) : shotCanvas;
+  let octx = outCanvas.getContext('2d', { willReadFrequently: true });
+
   // Edición fotográfica automática (si está activada) — sobre la imagen, no el texto
-  if (config.photoEnhance) { try { enhanceCanvas(shotCanvas); } catch (e) {} }
+  if (config.photoEnhance) { try { enhanceCanvas(outCanvas); } catch (e) {} }
   const now = new Date();
-  drawOverlayBottom(ctx, sw, sh, lastPos, now);
+  drawOverlayBottom(octx, outCanvas.width, outCanvas.height, lastPos, now);
   flashScreen();
   shutterSound();
 
   if (turnedOn) { try { await videoTrack.applyConstraints({ advanced: [{ torch: false }] }); } catch (e) {} }
   macroOffAfterCapture(); // el macro se apaga tras tomar la foto
 
-  shotCanvas.toBlob(async (blob) => {
+  outCanvas.toBlob(async (blob) => {
     // Graba el GPS real en el archivo (EXIF), así la galería ubica la foto en el mapa
     if (lastPos && lastPos.coords && typeof lastPos.coords.latitude === 'number') {
       try { blob = await insertExifGps(blob, lastPos.coords.latitude, lastPos.coords.longitude, lastPos.coords.altitude); } catch (e) {}
@@ -1036,7 +1137,8 @@ function buildExifGps(lat, lon, alt) {
   return app1;
 }
 
-/* Decide qué hacer con cada foto: guardar, compartir, o acumular para el lote */
+/* Decide qué hacer con cada foto.
+   Regla pedida: SIEMPRE guardar en la galería primero; si el modo usa WhatsApp, compartir después. */
 function handleCapturedFile(file, blob, date) {
   // Si estamos en un flujo de Mensajes Mejorados, desviar al callback
   if (_enhancedCallback) {
@@ -1045,27 +1147,60 @@ function handleCapturedFile(file, blob, date) {
     cb(file, blob, date);
     return;
   }
-  
+
   const mode = activeMode();
   const inSeq = mode && mode.steps && mode.steps.length;
-  if (config.whatsapp && config.whatsappMode === 'complete' && inSeq) {
-    modeBatch.push({ file, stamp: stampOf(date) }); // se comparte/guarda todo al completar
-  } else if (config.whatsapp) {
-    shareFiles([file], waCaptionSingle(date));       // compartir esta foto (puedes enviar y guardar)
-  } else {
-    saveBlob(blob, file);                            // guardar según "Al guardar"
+  const wa = modeWantsWhatsApp(mode);
+  const batchMode = wa && config.whatsappMode === 'complete' && inSeq;
+
+  if (isIOS) {
+    // iPhone (web): no se puede guardar Y compartir con una sola acción; una hoja por foto.
+    if (batchMode) { modeBatch.push({ file, stamp: stampOf(date) }); }
+    else if (wa) { shareFiles([file], waCaptionSingle(date, mode), mode); }
+    else { saveToGallery(blob, file); }
+    return;
   }
+
+  // Android: SIEMPRE guarda primero en la galería…
+  saveToGallery(blob, file, wa);
+  // …y después comparte según el modo.
+  if (batchMode) { modeBatch.push({ file, stamp: stampOf(date) }); }
+  else if (wa) { shareFiles([file], waCaptionSingle(date, mode), mode); }
+}
+
+// ¿Este modo debe compartir por WhatsApp? (config global o por modo)
+function modeWantsWhatsApp(mode) {
+  if (mode && mode.whatsapp === true) return true;
+  if (mode && mode.whatsapp === false) return false;
+  return !!config.whatsapp; // por defecto, lo global
+}
+
+/* Guardar en galería. Android: descarga directa (queda en Galería/Descargas).
+   iOS (web): no se puede sin la hoja de compartir, así que se usa "Guardar imagen". */
+async function saveToGallery(blob, file, silent) {
+  file = file || new File([blob], `${config.filePrefix || 'foto'}_${tsName()}.jpg`, { type: 'image/jpeg' });
+  if (isIOS) {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file] }); return; }
+      catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = file.name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  if (!silent) toast('Guardada en la galería');
 }
 
 /* Si la secuencia del modo se completó, comparte todas las fotos juntas */
 function checkBatchComplete() {
   const mode = activeMode();
   if (!mode || !mode.steps || !mode.steps.length) return;
-  if (config.whatsapp && config.whatsappMode === 'complete' && stepIndex >= mode.steps.length && modeBatch.length) {
+  if (modeWantsWhatsApp(mode) && config.whatsappMode === 'complete' && stepIndex >= mode.steps.length && modeBatch.length) {
     const files = modeBatch.map(b => b.file);
     const caption = batchCaption(mode, modeBatch);
     modeBatch = [];
-    shareFiles(files, caption);
+    shareFiles(files, caption, mode);
   }
 }
 function batchCaption(mode, batch) {
@@ -1081,12 +1216,17 @@ function batchCaption(mode, batch) {
   if (target) parts.push('Para: ' + target);
   return parts.join('\n');
 }
-async function shareFiles(files, caption) {
+async function shareFiles(files, caption, mode) {
+  const target = (mode && mode.waTarget) || config.whatsappTarget;
   if (navigator.canShare && navigator.canShare({ files })) {
-    try { await navigator.share({ files, text: caption }); toast('Elige WhatsApp y el chat, luego envía'); return; }
-    catch (e) { if (e && e.name === 'AbortError') return; }
+    try {
+      await navigator.share({ files, text: caption });
+      toast(target ? `Elige WhatsApp y abre el chat de "${target}", luego envía` : 'Elige WhatsApp y el chat, luego envía', 2600);
+      return;
+    } catch (e) { if (e && e.name === 'AbortError') return; }
   }
-  toast('Compartir no está disponible aquí; las fotos quedaron guardadas');
+  // Las fotos YA quedaron guardadas en la galería (se guardan antes de compartir)
+  toast('Compartir no está disponible; las fotos quedaron en la galería', 2600);
 }
 
 /* Detección simple de imagen movida (varianza del laplaciano) */
@@ -1119,21 +1259,13 @@ function stampOf(d) {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
 }
 function waCaption() { return buildLines(lastPos).join('\n'); }
-function waCaptionSingle(date) { return buildLines(lastPos, date).join('\n'); }
-
-async function saveBlob(blob, file) {
-  file = file || new File([blob], `${config.filePrefix || 'foto'}_${tsName()}.jpg`, { type: 'image/jpeg' });
-  const wantShare = config.saveMode === 'share' || (config.saveMode === 'auto' && isIOS);
-  if (wantShare && navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file] }); toast('Guarda con "Guardar imagen"'); return; }
-    catch (e) { if (e && e.name === 'AbortError') return; }
-  }
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = file.name; document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
-  toast('Imagen guardada');
+function waCaptionSingle(date, mode) {
+  const lines = buildLines(lastPos, date);
+  if (mode && mode.waMessage) lines.unshift(mode.waMessage);
+  return lines.join('\n');
 }
+
+async function saveBlob(blob, file) { return saveToGallery(blob, file); }
 
 let lastThumbURL = null;
 function setThumb(blob) {
@@ -1180,8 +1312,8 @@ function renderWheel() {
   const wrap = $('wheel-wrap') || wheel.parentElement;
   if (wrap) wrap.style.display = '';
   wheel.innerHTML = '';
-  // Built-in: CÁMARA (principal) y VIDEO, luego los modos del usuario
-  const items = [{ id: CAM_ID, name: 'CÁMARA', cls: 'wheel-cam' }, { id: VID_ID, name: 'VIDEO', cls: 'wheel-vid' }];
+  // Built-in: VIDEO (izquierda) y CÁMARA (principal, centrada), luego los modos del usuario
+  const items = [{ id: VID_ID, name: 'VIDEO', cls: 'wheel-vid' }, { id: CAM_ID, name: 'CÁMARA', cls: 'wheel-cam' }];
   modes.forEach(m => items.push({ id: m.id, name: m.name }));
   items.forEach(it => {
     const el = document.createElement('button');
@@ -1293,7 +1425,6 @@ function renderSettings() {
   $('cfg-aspect').value = config.aspect;
   $('cfg-text-size').value = String(config.textScale);
   $('cfg-decimals').value = String(config.decimals);
-  $('cfg-save').value = config.saveMode;
   $('cfg-prefix').value = config.filePrefix;
   $('cfg-compass').checked = config.compass;
   $('cfg-sound').checked = config.sound;
@@ -1331,7 +1462,6 @@ function bindSettings() {
   $('cfg-text-size').addEventListener('change', e => { config.textScale = parseFloat(e.target.value); saveConfig(); updateLiveOverlay(); });
   $('cfg-default-mode').addEventListener('change', e => { config.defaultMode = e.target.value; saveConfig(); });
   $('cfg-decimals').addEventListener('change', e => { config.decimals = parseInt(e.target.value, 10); saveConfig(); updateLiveOverlay(); });
-  $('cfg-save').addEventListener('change', e => { config.saveMode = e.target.value; saveConfig(); });
   $('cfg-prefix').addEventListener('input', e => { config.filePrefix = e.target.value.replace(/[^\w\-]/g, '') || 'foto'; saveConfig(); });
   $('cfg-compass').addEventListener('change', e => { config.compass = e.target.checked; saveConfig(); if (config.compass) ensureHeading(); updateCompass(); });
   $('cfg-sound').addEventListener('change', e => { config.sound = e.target.checked; saveConfig(); });
@@ -1424,6 +1554,17 @@ function renderModesEditor() {
     // WhatsApp por modo
     const waWrap = document.createElement('div');
     waWrap.className = 'mode-wa';
+    const waSel = document.createElement('select');
+    waSel.className = 'mode-wa-sel';
+    waSel.innerHTML = '<option value="inherit">WhatsApp: según ajuste global</option>' +
+                      '<option value="on">WhatsApp: SÍ compartir en este modo</option>' +
+                      '<option value="off">WhatsApp: NO compartir en este modo</option>';
+    waSel.value = m.whatsapp === true ? 'on' : m.whatsapp === false ? 'off' : 'inherit';
+    waSel.addEventListener('change', e => {
+      const v = e.target.value;
+      if (v === 'on') m.whatsapp = true; else if (v === 'off') m.whatsapp = false; else delete m.whatsapp;
+      saveModes();
+    });
     const waTarget = document.createElement('input');
     waTarget.className = 'mode-wa-target';
     waTarget.value = m.waTarget || '';
@@ -1435,7 +1576,7 @@ function renderModesEditor() {
     waMsg.value = m.waMessage || '';
     waMsg.placeholder = 'Mensaje al compartir (opcional). Se le añaden las horas de la 1ª y última imagen.';
     waMsg.addEventListener('input', e => { m.waMessage = e.target.value; saveModes(); });
-    waWrap.append(waTarget, waMsg);
+    waWrap.append(waSel, waTarget, waMsg);
 
     // Mensajes Mejorados
     const emWrap = document.createElement('div');
@@ -1747,7 +1888,12 @@ function currentBundle() {
   const sel = modes.filter(m => {
     const el = document.querySelector(`input[data-share-mode="${m.id}"]`);
     return el && el.checked;
-  }).map(m => ({ name: m.name, steps: m.steps || [], waTarget: m.waTarget || '', waMessage: m.waMessage || '' }));
+  }).map(m => {
+    const o = { name: m.name, steps: m.steps || [], waTarget: m.waTarget || '', waMessage: m.waMessage || '' };
+    if (m.whatsapp === true || m.whatsapp === false) o.whatsapp = m.whatsapp;
+    if (m.enhancedMessages) o.enhancedMessages = m.enhancedMessages; // no perder los Mensajes Mejorados
+    return o;
+  });
   if (sel.length) b.modes = sel;
   return b;
 }
@@ -1805,13 +1951,18 @@ function applyImport(b) {
   if (b.colorMode) { config.colorMode = b.colorMode; if (b.textColor) config.textColor = b.textColor; if (typeof b.shadow === 'boolean') config.shadow = b.shadow; }
   // modos: reemplaza por los del que comparte (queda igual que él)
   if (Array.isArray(b.modes)) {
-    modes = b.modes.filter(mm => mm && mm.name).map(mm => ({
-      id: slug(mm.name) + '_' + uid(),
-      name: String(mm.name),
-      steps: (mm.steps || []).map(s => String(s).trim()).filter(Boolean),
-      waTarget: mm.waTarget || '', waMessage: mm.waMessage || ''
-    }));
-    activeModeId = modes[0] ? modes[0].id : 'libre';
+    modes = b.modes.filter(mm => mm && mm.name).map(mm => {
+      const m = {
+        id: slug(mm.name) + '_' + uid(),
+        name: String(mm.name),
+        steps: (mm.steps || []).map(s => String(s).trim()).filter(Boolean),
+        waTarget: mm.waTarget || '', waMessage: mm.waMessage || ''
+      };
+      if (mm.whatsapp === true || mm.whatsapp === false) m.whatsapp = mm.whatsapp;
+      if (mm.enhancedMessages) { m.enhancedMessages = mm.enhancedMessages; emEnsure(m); }
+      return m;
+    });
+    activeModeId = '__cam__';   // se mantiene CÁMARA como principal
     stepIndex = 0; modeBatch = [];
   }
   saveConfig(); saveModes();
@@ -1963,6 +2114,7 @@ async function shareEnhancedBatch(batch, caption) {
 function doSimpleCapture(isEnhanced) {
   if (isEnhanced) {
     _enhancedCallback = (file, blob, date) => {
+      if (!isIOS) saveToGallery(blob, file, true); // Android: cada foto queda en la galería igual
       enhancedPhotoBatch.push({ blob, date });
       enhancedCaptureState.photoIndex++;
       advanceEnhancedCapture();
@@ -1975,6 +2127,15 @@ function bindShare() {
   $('btn-share-back').addEventListener('click', () => showScreen('settings'));
   $('btn-share-send').addEventListener('click', doShareSend);
   $('btn-share-copy').addEventListener('click', doShareCopy);
+  $('btn-share-app').addEventListener('click', doShareApp);
+}
+async function doShareApp() {
+  const url = location.origin + location.pathname; // enlace limpio de la app, sin configuración
+  if (navigator.share) {
+    try { await navigator.share({ title: 'GeoCam', text: 'Instala GeoCam, la cámara con coordenadas para terreno:', url }); return; }
+    catch (e) { if (e && e.name === 'AbortError') return; }
+  }
+  copyText(url); toast('Enlace de la app copiado');
 }
 
 
@@ -2166,11 +2327,30 @@ function saveEditorImage() {
    ========================================================================= */
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredPrompt = e; });
-window.addEventListener('appinstalled', () => { hideInstall(); });
+window.addEventListener('appinstalled', () => { try { localStorage.setItem('geocam.installed', '1'); } catch (e) {} hideInstall(); });
 
+// ¿La app ya está instalada o corriendo como app (APK/PWA)?
+function isInstalledApp() {
+  if (isStandalone()) return true;                                   // PWA en pantalla completa
+  if (document.referrer && document.referrer.startsWith('android-app://')) return true; // abierta desde el APK (TWA)
+  try { if (localStorage.getItem('geocam.installed')) return true; } catch (e) {}
+  return false;
+}
 function maybeShowInstall() {
-  if (isStandalone()) return;
+  if (isInstalledApp()) return;                 // ya instalada → nunca mostrar
   if (sessionStorage.getItem('geocam.hideInstall')) return;
+  // Confirma con el sistema si hay una app relacionada instalada (Android)
+  if (navigator.getInstalledRelatedApps) {
+    navigator.getInstalledRelatedApps().then(apps => {
+      if (apps && apps.length) { try { localStorage.setItem('geocam.installed', '1'); } catch (e) {} hideInstall(); return; }
+      showInstallBanner();
+    }).catch(() => showInstallBanner());
+  } else {
+    showInstallBanner();
+  }
+}
+function showInstallBanner() {
+  if (isInstalledApp()) return;
   $('install-text').textContent = isIOS
     ? 'Instala GeoCam: toca Compartir y "Añadir a pantalla de inicio".'
     : 'Instala GeoCam como app para abrirla más rápido.';
@@ -2182,7 +2362,7 @@ function bindInstall() {
   $('btn-install').addEventListener('click', async () => {
     if (deferredPrompt) {
       deferredPrompt.prompt();
-      try { await deferredPrompt.userChoice; } catch (e) {}
+      try { const r = await deferredPrompt.userChoice; if (r && r.outcome === 'accepted') { localStorage.setItem('geocam.installed', '1'); } } catch (e) {}
       deferredPrompt = null; hideInstall();
     } else if (isIOS) {
       alert('Para instalar en iPhone:\n1) Toca el botón Compartir (cuadrado con flecha).\n2) "Añadir a pantalla de inicio".\n3) Añadir.');
@@ -2233,6 +2413,9 @@ function bindControls() {
   $('shutter').addEventListener('click', () => { ensureHeading(); handleCapture(); });
   $('btn-torch').addEventListener('click', toggleTorch);
   $('btn-macro').addEventListener('click', toggleMacro);
+  $('btn-minimacro').addEventListener('click', toggleMinimacro);
+  const cl = $('compass-label');
+  if (cl) cl.addEventListener('click', (e) => { e.stopPropagation(); ensureHeading(); });
   $('btn-lens').addEventListener('click', switchLens);
   $('btn-settings').addEventListener('click', () => showScreen('settings'));
   $('btn-settings-back').addEventListener('click', () => showScreen('camera'));
@@ -2254,6 +2437,7 @@ function registerSW() {
 }
 
 function init() {
+  if (LOWEND) body.classList.add('lowend');
   bindControls();
   bindSettings();
   bindEditor();
@@ -2262,6 +2446,7 @@ function init() {
   bindWheelScroll();
   bindSwipe();
   bindPinch();
+  bindPhysAngle();
   renderWheel();
   updateLiveOverlay();
   updateCompass();
@@ -2282,8 +2467,8 @@ function init() {
   window.addEventListener('click', kickHeading, { once: true });
 
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && isScreen('camera')) { ensureCamera(); startBrightnessMonitor(); }
-    else { stopBrightnessMonitor(); }
+    if (!document.hidden && isScreen('camera')) { ensureCamera(); startBrightnessMonitor(); startGeo(); }
+    else { stopBrightnessMonitor(); stopGeo(); }   // en segundo plano: nada de GPS ni muestreo (ahorra batería)
   });
 
   showScreen('camera');

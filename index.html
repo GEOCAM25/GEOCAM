@@ -56,7 +56,7 @@
         <span class="cm" data-deg="315">NPo</span>
         <div class="compass-center"></div>
       </div>
-      <span id="compass-label">tocar</span>
+      <button id="compass-label" type="button">tocar</button>
     </div>
 
     <div id="top-actions">
@@ -109,9 +109,13 @@
       <button id="thumb" aria-label="Última foto"></button>
       <button id="shutter" aria-label="Capturar"></button>
       <div id="macro-side">
-        <button id="btn-macro" class="side-btn" aria-label="Macro (enfoque cercano)">
+        <button id="btn-macro" class="side-btn" aria-label="Macro (enfoque muy cercano)">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/><ellipse cx="12" cy="5.6" rx="2.3" ry="3.4"/><ellipse cx="12" cy="18.4" rx="2.3" ry="3.4"/><ellipse cx="5.6" cy="12" rx="3.4" ry="2.3"/><ellipse cx="18.4" cy="12" rx="3.4" ry="2.3"/></svg>
           <span>Macro</span>
+        </button>
+        <button id="btn-minimacro" class="side-btn" aria-label="Mini macro (enfoque cercano ~30 cm)">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/><ellipse cx="12" cy="6.8" rx="1.7" ry="2.6"/><ellipse cx="12" cy="17.2" rx="1.7" ry="2.6"/><ellipse cx="6.8" cy="12" rx="2.6" ry="1.7"/><ellipse cx="17.2" cy="12" rx="2.6" ry="1.7"/></svg>
+          <span>Mini macro</span>
         </button>
       </div>
     </div>
@@ -255,14 +259,6 @@
           <option value="6">6</option>
         </select>
       </div>
-      <div class="field">
-        <label for="cfg-save">Al guardar</label>
-        <select id="cfg-save">
-          <option value="auto">Automático (recomendado)</option>
-          <option value="share">Guardar en Fotos / galería</option>
-          <option value="download">Descargar archivo</option>
-        </select>
-      </div>
     </div>
     <p class="note" style="margin-top:-4px">
       En iPhone, Safari <b>no permite</b> que una web guarde sola en Fotos. Con <b>Automático</b> o <b>Guardar en Fotos</b> se abre el menú de Compartir y tocas <b>“Guardar imagen”</b> (un toque) para dejarla en la galería. <b>Descargar archivo</b> la deja en Archivos (iPhone) o en Descargas (Android, visible en la galería). El guardado directo sin tocar nada solo es posible en la app nativa de Android.
@@ -339,8 +335,13 @@
   </div>
 
   <div class="sheet-body">
-    <p class="note" style="margin-top:0;margin-bottom:16px">
-      Marca qué compartir y genera un <b>enlace</b>. Quien lo abra en GeoCam quedará configurado <b>igual que tú automáticamente</b> (puede volver a fábrica si no le gusta). Nada se sincroniza solo.
+    <div class="section-title" style="margin-top:0">Compartir la app</div>
+    <p class="note" style="margin-top:4px">Envía el enlace de GeoCam para que otra persona la abra e instale en su teléfono. No incluye tus ajustes ni tus modos, solo la app.</p>
+    <button id="btn-share-app" class="save-big">Compartir app</button>
+
+    <div class="section-title" style="margin-top:24px">Compartir configuración</div>
+    <p class="note" style="margin-top:4px">
+      Genera un <b>enlace de configuración</b>. Si la otra persona <b>ya tiene la app instalada</b> y lo abre, se le aplican <b>tus ajustes y los modos incluidos</b> automáticamente (puede volver a fábrica si no le gusta). Nada se sincroniza solo.
     </p>
 
     <div class="switch-row">
@@ -353,9 +354,9 @@
     <div id="share-modes-list"></div>
     <p class="note" style="margin-top:8px">Los modos incluidos <b>reemplazan</b> los de la otra persona para que queden idénticos a los tuyos.</p>
 
-    <button id="btn-share-send" class="save-big">Compartir enlace</button>
+    <button id="btn-share-send" class="save-big">Compartir configuración</button>
     <div style="display:flex;gap:10px;margin-top:12px">
-      <button id="btn-share-copy" class="editor-btn" style="width:100%">Copiar enlace</button>
+      <button id="btn-share-copy" class="editor-btn" style="width:100%">Copiar enlace de configuración</button>
     </div>
   </div>
 </section>
