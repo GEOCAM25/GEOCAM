@@ -125,7 +125,7 @@ function showScreen(name) {
   if (name !== 'camera' && recording) stopVideo(); // si sale de la cámara, detiene grabación
   if (name === 'camera') {
     ensureCamera(); startBrightnessMonitor();
-    if (!isIOS) ensureHeading(); // Android no requiere permiso: arranca la brújula sola
+    if (!isIOS && config.compass) ensureHeading(); // Android no requiere permiso: arranca sola si está activada
   }
   else { stopBrightnessMonitor(); }
   if (name === 'settings') renderSettings();
@@ -540,6 +540,7 @@ async function ensureHeading() {
   if (headingBound) return;
   let lastDrawn = -999, sawAbsolute = false, relOK = false;
   const handler = (ev) => {
+    if (!config.compass) return; // apagada en ajustes: no procesar (ahorra batería en gama baja)
     let h = null;
     const isAbs = (typeof ev.webkitCompassHeading === 'number') || ev.absolute === true || ev.type === 'deviceorientationabsolute';
     if (typeof ev.webkitCompassHeading === 'number') {
