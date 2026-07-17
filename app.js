@@ -557,8 +557,13 @@ async function ensureHeading() {
       h = ((h % 360) + 360) % 360;
       lastHeading = h;
       headingState = 'on';
-      let d = Math.abs(h - lastDrawn); if (d > 180) d = 360 - d;
-      if (d >= (LOWEND ? 2 : 1)) { lastDrawn = h; scheduleCompass(); }
+      if (lastDrawn < 0) {
+        // Primera lectura: dibuja siempre (el sentinel -999 rompía el cálculo de delta).
+        lastDrawn = h; scheduleCompass();
+      } else {
+        let d = Math.abs(h - lastDrawn); if (d > 180) d = 360 - d;
+        if (d >= (LOWEND ? 2 : 1)) { lastDrawn = h; scheduleCompass(); }
+      }
     }
   };
   if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
