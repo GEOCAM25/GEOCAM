@@ -2415,7 +2415,7 @@ function handleCapture() {
 }
 
 function bindControls() {
-  $('shutter').addEventListener('click', () => { ensureHeading(); handleCapture(); });
+  $('shutter').addEventListener('click', handleCapture);
   $('btn-torch').addEventListener('click', toggleTorch);
   $('btn-macro').addEventListener('click', toggleMacro);
   $('btn-minimacro').addEventListener('click', toggleMinimacro);
@@ -2428,7 +2428,7 @@ function bindControls() {
   $('btn-editor-back').addEventListener('click', () => showScreen('camera'));
   $('reminder-skip').addEventListener('click', skipStep);
   $('reminder-restart').addEventListener('click', restartSeq);
-  $('start-btn').addEventListener('click', () => { ensureHeading(); startCamera(currentDeviceId); });
+  $('start-btn').addEventListener('click', () => { startCamera(currentDeviceId); });
   $('thumb').addEventListener('click', () => { if (lastThumbURL) window.open(lastThumbURL, '_blank'); });
   $('viewfinder-tap').addEventListener('click', onViewfinderTap);
   $('compass').addEventListener('click', ensureHeading);
@@ -2466,10 +2466,10 @@ function init() {
   window.addEventListener('resize', updateAspectFrame);
   window.addEventListener('orientationchange', () => setTimeout(updateAspectFrame, 200));
 
-  // La brújula (iOS) exige permiso desde un gesto: lo pedimos en la primera interacción.
-  const kickHeading = () => { ensureHeading(); };
-  window.addEventListener('touchend', kickHeading, { once: true });
-  window.addEventListener('click', kickHeading, { once: true });
+  // En iOS la brújula exige permiso de movimiento desde un gesto. NO lo pedimos
+  // automáticamente para no disparar todos los permisos de golpe al abrir la app:
+  // el usuario activa la brújula tocando la propia brújula (botón "tocar").
+  // En Android arranca sola al entrar a la cámara (ver showScreen).
 
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && isScreen('camera')) { ensureCamera(); startBrightnessMonitor(); startGeo(); }
