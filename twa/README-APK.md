@@ -43,5 +43,19 @@ Puedes partir del archivo `twa/twa-manifest.example.json` de este proyecto (ajus
 
 ---
 
+## Actualizaciones automáticas (importante)
+
+El APK es una **TWA**: por dentro carga la web publicada en GitHub Pages. Por eso **la app se actualiza sola** cada vez que publicas cambios en el repositorio; **no hace falta reinstalar el APK ni volver a firmarlo**.
+
+Cómo funciona:
+- El **service worker** (`sw.js`) sirve el código de la app con estrategia *red primero*: al abrir (y al volver a primer plano) busca la versión nueva y la descarga.
+- Cuando hay una versión nueva lista, la app muestra un aviso **“Nueva versión disponible — toca para actualizar”**. Al tocarlo se aplica al instante. Si no, se aplica sola la próxima vez que se abre.
+- Sin conexión, la app sigue funcionando con la última versión guardada en caché.
+- La versión instalada se ve al final de **Configuración** (“GeoCam · versión …”).
+
+Solo necesitas **generar un APK nuevo** si cambias el *envoltorio* (nombre, icono, `packageId`, permisos nativos). En ese caso sube `appVersionCode`/`appVersionName` en `twa-manifest.example.json`. Los cambios de la **web** (brújula, GPS, diseño, etc.) llegan solos.
+
+---
+
 ## Subir a Google Play (opcional)
 Solo si quieres publicarla en la tienda: necesitas una **cuenta de desarrollador de Google** (pago único de ~US$25) y subir el `.aab`. Para instalar el `.apk` directo o compartirlo, no pagas nada.

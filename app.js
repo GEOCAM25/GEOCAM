@@ -8,6 +8,9 @@
    persona CONFIRMA la importación. No hay servidor ni sincronización automática.
    ========================================================================= */
 
+/* ---------------- Versión de la app (se muestra en Configuración) ---------------- */
+const APP_VERSION = '2.1.0';
+
 /* ---------------- Almacenamiento local ---------------- */
 const LS = { config: 'geocam.config.v1', modes: 'geocam.modes.v1' };
 
@@ -1420,6 +1423,8 @@ function restartSeq() { stepIndex = 0; modeBatch = []; updateReminder(); }
    CONFIGURACIÓN
    ========================================================================= */
 function renderSettings() {
+  const ver = $('app-version');
+  if (ver) ver.textContent = 'GeoCam · versión ' + APP_VERSION;
   $('cfg-text').value = config.customText;
   $('cfg-orientation').value = config.orientation;
   $('cfg-align').value = config.align;
@@ -2383,11 +2388,16 @@ function bindInstall() {
    UTILIDADES UI
    ========================================================================= */
 let toastTimer = null;
-function toast(msg, ms) {
+function toast(msg, ms, onTap) {
   const t = $('toast');
   t.textContent = msg; t.classList.add('show');
+  // Toast tocable (p. ej. "actualizar"): habilita clic y lo cierra al tocar.
+  t.classList.toggle('tap', typeof onTap === 'function');
+  t.onclick = (typeof onTap === 'function')
+    ? () => { t.classList.remove('show'); t.onclick = null; try { onTap(); } catch (e) {} }
+    : null;
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), ms || 2200);
+  toastTimer = setTimeout(() => { t.classList.remove('show'); t.onclick = null; }, ms || 2200);
 }
 
 function showStartOverlay(err) {
@@ -2436,10 +2446,42 @@ function bindControls() {
   $('zoom-badge').addEventListener('click', resetZoom);
 }
 function tickClock() { setInterval(() => { if (isScreen('camera')) updateLiveOverlay(); }, 1000); }
+/* Registra el service worker y avisa cuando hay una versión nueva publicada.
+   En la APK (TWA) esto hace que la app se actualice sola sin reinstalarla. */
+let swReloading = false;
 function registerSW() {
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').catch(() => {}); });
-  }
+  if (!('serviceWorker' in navigator)) return;
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').then((reg) => {
+      // Si ya hay uno esperando (versión nueva lista), ofrece actualizar.
+      if (reg.waiting && navigator.serviceWorker.controller) offerUpdate(reg.waiting);
+      // Detecta nuevas versiones que se instalan mientras la app está abierta.
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing;
+        if (!nw) return;
+        nw.addEventListener('statechange', () => {
+          if (nw.state === 'installed' && navigator.serviceWorker.controller) offerUpdate(nw);
+        });
+      });
+      // Busca actualizaciones al abrir y cada vez que la app vuelve al frente.
+      reg.update().catch(() => {});
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) reg.update().catch(() => {});
+      });
+    }).catch(() => {});
+  });
+  // Cuando el worker nuevo toma el control, recarga una sola vez para estrenar la versión.
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (swReloading) return;
+    swReloading = true;
+    window.location.reload();
+  });
+}
+function offerUpdate(worker) {
+  // Aviso discreto: tocar para aplicar la actualización ya descargada.
+  toast('Nueva versión disponible — toca para actualizar', 8000, () => {
+    worker.postMessage({ type: 'SKIP_WAITING' });
+  });
 }
 
 function init() {
